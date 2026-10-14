@@ -1,6 +1,7 @@
 {
   "1": {
     "id": 1,
-    "name": "tony"
+    "name": "图标路径示例",
+    "icon_path": "../assets/assistant-icon.png"
   }
 }
