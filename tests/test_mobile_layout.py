@@ -282,11 +282,28 @@ class MobileLayoutTests(unittest.TestCase):
             )
 
             icon_cell.on_click(None)
-            self.assertEqual(page.dialogs[-1].title.value, "编辑「icon_path」")
+            dialog = page.dialogs[-1]
+            notification_count = len(page.dialogs) - 1
+            self.assertEqual(
+                dialog.title.controls[0].value,
+                "编辑「icon_path」",
+            )
+            self.assertEqual(
+                dialog.content.value,
+                "../assets/assistant-icon.png",
+            )
+            dialog.content.value = "unsaved-change.png"
+            close_button = dialog.title.controls[2]
+            self.assertEqual(close_button.tooltip, "关闭")
+            close_button.on_click(None)
+            self.assertEqual(len(page.dialogs), notification_count)
+
+            icon_cell.on_click(None)
             self.assertEqual(
                 page.dialogs[-1].content.value,
                 "../assets/assistant-icon.png",
             )
+            page.dialogs[-1].title.controls[2].on_click(None)
 
     def test_unavailable_saved_directory_is_preserved_without_blocking_startup(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

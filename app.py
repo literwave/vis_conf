@@ -11,7 +11,7 @@ import shutil
 import time
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import flet as ft
 
@@ -803,6 +803,32 @@ def main(page: ft.Page):
             return preferred
         return max(240, min(preferred, int(available_height) - margin))
 
+    def show_alert_dialog(
+        dialog: ft.AlertDialog,
+        on_close: Callable[[], None] | None = None,
+    ):
+        def close_dialog(_):
+            if on_close is not None:
+                on_close()
+            else:
+                page.pop_dialog()
+
+        dialog.title = ft.Row(
+            [
+                dialog.title or ft.Container(),
+                ft.Container(expand=True),
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_size=18,
+                    tooltip="关闭",
+                    on_click=close_dialog,
+                ),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
+        )
+        page.show_dialog(dialog)
+
     def available_initial_directory(directory: str | None) -> str | None:
         if not directory:
             return None
@@ -1410,7 +1436,7 @@ def main(page: ft.Page):
             page.pop_dialog()
             refresh_table()
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(f"编辑「{column}」"),
@@ -1442,7 +1468,7 @@ def main(page: ft.Page):
             page.pop_dialog()
             refresh_table()
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("编辑字段注释"),
@@ -1518,7 +1544,7 @@ def main(page: ft.Page):
             checkbox.on_change = update_rule
         update_rule(None)
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("导表规则"),
@@ -1604,7 +1630,7 @@ def main(page: ft.Page):
             refresh_table()
             notify(f"已删除第 {row_number} 行")
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("删除数据行"),
@@ -1776,7 +1802,7 @@ def main(page: ft.Page):
 
         render_columns()
         column_manager_refresh = render_columns
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("管理列"),
@@ -1812,7 +1838,8 @@ def main(page: ft.Page):
                     ft.TextButton("完成", on_click=close_manager),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
-            )
+            ),
+            on_close=lambda: close_manager(None),
         )
 
     def refresh_table():
@@ -2595,7 +2622,7 @@ def main(page: ft.Page):
             return
         new_configuration_name.value = ""
         new_configuration_name.error_text = None
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("新建配置表"),
@@ -2690,7 +2717,7 @@ def main(page: ft.Page):
             page.update()
             notify(f"已删除配置表「{path.name}」")
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("删除配置表"),
@@ -2887,7 +2914,7 @@ def main(page: ft.Page):
         )
         if archive_saved_path is not None:
             summary_text += f"\nZIP 已保存至：{archive_saved_path}"
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text(f"{label}完成"),
@@ -2957,7 +2984,7 @@ def main(page: ft.Page):
                 selected_table_paths=selected_paths,
             )
 
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("选择增量导出的配置表"),
@@ -3000,7 +3027,7 @@ def main(page: ft.Page):
 
     def open_mobile_configuration_list(_):
         refresh_configuration_files()
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("选择配置表"),
@@ -3156,7 +3183,7 @@ def main(page: ft.Page):
                     wrap=True,
                 ),
             ]
-        page.show_dialog(
+        show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
                 title=ft.Text("导出设置"),
@@ -3255,7 +3282,7 @@ def main(page: ft.Page):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        page.show_dialog(dialog)
+        show_alert_dialog(dialog)
 
     def clear_column_form_error(
         error_text: ft.Text,
