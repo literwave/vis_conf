@@ -5,6 +5,7 @@
 - 分页查看和编辑表格，可添加、删除、拖动和复制数据行。
 - 管理列、配置导出规则，并分别生成前后端文件。
 - 用小缩略图预览配置表中的本地图片路径。
+- 桌面端可使用 AI Agent 生成配置修改预览，并确认后应用。
 
 ## 快速开始
 
@@ -84,8 +85,42 @@ flet build apk --module-name app --project game-config-assistant --org com.liter
 | 复制并插入行 | 选中源行后按 `Ctrl+C`，再选目标行并按 `Ctrl+V`；副本插入目标行之前，不覆盖数据 |
 | 撤销 | 按 `Ctrl+Z` 撤销最近一次编辑、行排序、复制、新增或删除，最多保留 50 步 |
 | 分页 | 可选择每页显示 10、20、50 或 100 行；新增行会追加到表格末尾并跳转到所在页 |
+| AI Agent（桌面端） | 顶部「AI Agent」可连接 Cursor Agent CLI 或 OpenAI 兼容 API；仅提供当前页，确认预览后应用，可用 `Ctrl+Z` 撤销 |
 
 复制粘贴快捷键使用应用内行剪贴板，不会替代系统文本剪贴板。编辑和增量导出队列仅保留在当前会话，不会写回原 TSV；切换配置表不会丢失当前会话中的编辑。
+
+### AI Agent（桌面端）
+
+点击窗口顶部的「AI Agent」，再点右上角齿轮配置连接方式和模式：
+
+- **Cursor Agent CLI**：按下面的 Windows 安装步骤安装并登录 Cursor CLI。可选 Ask（只读问答）或 Agent（可调用工具）；CLI 在临时目录中启动，当前表当前页的数据作为提示提供。
+- **OpenAI 兼容 API**：填写 HTTPS API 基础地址、模型名和 API Key。API Key 存在系统凭据库中，不会写入 `settings.json`；请求会发送到配置的服务地址。
+
+Agent 只建议修改当前页已有行和列。修改先显示类型校验后的预览；只有点击「确认应用」才会改动当前会话，可用 `Ctrl+Z` 撤销。它不会自动写入 TSV；导出仍由用户操作。Android 暂不提供 Agent 功能。
+
+> Cursor CLI 的 Agent 模式可运行终端命令并读写本机文件；临时工作目录不是安全沙箱。仅在信任请求内容时使用。预览确认只控制本工具对表格的应用，不限制 CLI 的本机工具权限。
+
+#### Windows 安装 Cursor Agent CLI
+
+1. 打开 **PowerShell**，运行 Cursor 官方安装命令：
+
+   ```powershell
+   irm 'https://cursor.com/install?win32=true' | iex
+   ```
+
+   如果你不希望执行 PowerShell 安装脚本，可从 [Cursor CLI 官方文档](https://cursor.com/docs/cli)查看最新安装方式。
+
+2. 安装完成后，**关闭并重新打开 PowerShell**，运行以下命令确认 CLI 已加入 PATH：
+
+   ```powershell
+   agent --version
+   ```
+
+3. 运行 `agent`，按 CLI 提示在浏览器中登录 Cursor 账号并完成授权。登录成功后可退出 CLI。
+4. 如果星图在安装 CLI 时已经打开，请完全退出并重新启动星图，让它读取更新后的 PATH。
+5. 在星图顶部打开「AI Agent」，点击右上角齿轮，选择「Cursor Agent CLI」及 Ask 或 Agent 模式，保存连接，再发送请求。
+
+如果提示找不到 Cursor Agent CLI，先在**重新打开的 PowerShell**里再次运行 `agent --version`。若 PowerShell 也找不到命令，请根据官方文档检查安装是否完成及 CLI 所在目录是否已加入用户 PATH，然后重新启动星图。
 
 ## TSV 格式与导出
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import flet as ft
 
@@ -388,6 +388,65 @@ class MobileLayoutTests(unittest.TestCase):
             self.assertEqual(len(picker.calls), 1)
             self.assertIsNone(picker.calls[0]["initial_directory"])
             self.assertEqual(len(page.dialogs), 1)
+
+    def test_agent_previews_changes_and_applies_only_after_confirmation(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        response = json.dumps(
+            {
+                "message": "建议统一名称。",
+                "changes": [
+                    {"row": 1, "column": "name", "value": "长剑"},
+                ],
+            },
+            ensure_ascii=False,
+        )
+        with (
+            patch("app._load_app_settings", return_value=({}, None)),
+            patch(
+                "app.request_cursor_proposal",
+                new=AsyncMock(return_value=response),
+            ),
+        ):
+            main(page)
+            header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
+            agent_button = next(
+                control
+                for control in header_actions.controls
+                if getattr(control, "content", None) == "AI Agent"
+            )
+            agent_button.on_click(None)
+
+            dialog = page.dialogs[-1]
+            messages_view = dialog.content.controls[1]
+            pending_preview = dialog.content.controls[2]
+            prompt_input, send_button = dialog.content.controls[3].controls
+            prompt_input.value = "缩短名称"
+            asyncio.run(send_button.on_click(None))
+
+            self.assertEqual(
+                messages_view.controls[-1].value,
+                "建议统一名称。",
+            )
+            self.assertTrue(
+                any(
+                    isinstance(control, ft.Text)
+                    and "新手长剑 → 长剑" in control.value
+                    for control in pending_preview.controls
+                )
+            )
+            self.assertEqual(self._table_rows(page)[0].content.controls[2].content.value, "新手长剑")
+
+            pending_preview.controls[-1].controls[1].on_click(None)
+
+        self.assertEqual(self._table_rows(page)[0].content.controls[2].content.value, "长剑")
+        table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+        undo_button = table_card.content.controls[1].controls[0].controls[3]
+        undo_button.on_click(None)
+        self.assertEqual(
+            self._table_rows(page)[0].content.controls[2].content.value,
+            "新手长剑",
+        )
 
 
 if __name__ == "__main__":

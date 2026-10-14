@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import csv
 import copy
 import io
@@ -14,6 +15,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 import flet as ft
+
+from ai_agent import (
+    load_api_key,
+    parse_agent_proposal,
+    request_api_proposal,
+    request_cursor_proposal,
+    save_api_key,
+    validate_api_settings,
+)
 
 
 PAGE_SIZES = (10, 20, 50, 100)
@@ -854,6 +864,31 @@ def main(page: ft.Page):
     annotations = SAMPLE_ANNOTATIONS.copy()
     rows = [row.copy() for row in SAMPLE_ROWS]
     saved_settings, settings_load_error = _load_app_settings()
+    saved_agent_settings = saved_settings.get("agent", {})
+    if not isinstance(saved_agent_settings, dict):
+        saved_agent_settings = {}
+    agent_settings = {
+        "provider": (
+            saved_agent_settings.get("provider")
+            if saved_agent_settings.get("provider") in {"cursor", "api"}
+            else "cursor"
+        ),
+        "base_url": (
+            saved_agent_settings.get("base_url")
+            if isinstance(saved_agent_settings.get("base_url"), str)
+            else "https://api.openai.com/v1"
+        ),
+        "model": (
+            saved_agent_settings.get("model")
+            if isinstance(saved_agent_settings.get("model"), str)
+            else ""
+        ),
+        "cursor_mode": (
+            saved_agent_settings.get("cursor_mode")
+            if saved_agent_settings.get("cursor_mode") in {"ask", "agent"}
+            else "ask"
+        ),
+    }
     saved_export_paths = saved_settings.get("export_paths", {})
     if not isinstance(saved_export_paths, dict):
         saved_export_paths = {}
@@ -1098,6 +1133,7 @@ def main(page: ft.Page):
             "backend_format": backend_format_select.value or "lua",
             "frontend_format": frontend_format_select.value or "json",
             "key_rules": key_rules_by_table,
+            "agent": agent_settings,
         }
         settings_path = _app_settings_path()
         temporary_path = settings_path.with_suffix(".tmp")
@@ -3215,6 +3251,496 @@ def main(page: ft.Page):
             )
         )
 
+    def open_agent_settings(_):
+        provider_select = ft.Dropdown(
+            label="连接方式",
+            value=agent_settings["provider"],
+            options=[
+                ft.DropdownOption(key="cursor", text="Cursor Agent CLI"),
+                ft.DropdownOption(key="api", text="OpenAI 兼容 API"),
+            ],
+            width=dialog_width(420),
+        )
+        cursor_mode_select = ft.Dropdown(
+            label="Cursor CLI 模式",
+            value=agent_settings["cursor_mode"],
+            options=[
+                ft.DropdownOption(key="ask", text="Ask（只读问答）"),
+                ft.DropdownOption(key="agent", text="Agent（可调用工具）"),
+            ],
+            width=dialog_width(420),
+            visible=agent_settings["provider"] == "cursor",
+        )
+        base_url_input = ft.TextField(
+            label="API 基础地址",
+            value=agent_settings["base_url"],
+            hint_text="例如 https://api.openai.com/v1",
+            visible=agent_settings["provider"] == "api",
+        )
+        model_input = ft.TextField(
+            label="模型名称",
+            value=agent_settings["model"],
+            hint_text="例如 gpt-4o-mini",
+            visible=agent_settings["provider"] == "api",
+        )
+        api_key_input = ft.TextField(
+            label="API Key",
+            password=True,
+            can_reveal_password=True,
+            hint_text="留空则保留已保存的 Key",
+            visible=agent_settings["provider"] == "api",
+        )
+        credential_status = ft.Text(size=12, color="#667085")
+        api_controls = ft.Column(
+            [base_url_input, model_input, api_key_input, credential_status],
+            spacing=8,
+            visible=agent_settings["provider"] == "api",
+        )
+        api_privacy_note = ft.Text(
+            "API Key 仅保存到系统凭据库，不会写入应用设置文件。"
+            "发送请求时会将当前页配置数据传给该 API 地址。",
+            size=11,
+            color="#667085",
+            visible=agent_settings["provider"] == "api",
+        )
+        remove_key_button = ft.OutlinedButton(
+            "删除已保存的 API Key",
+            icon=ft.Icons.DELETE_OUTLINE,
+            visible=agent_settings["provider"] == "api",
+        )
+        provider_help = ft.Text(
+            "使用 Cursor CLI 自己的登录状态，并在临时目录中运行；"
+            "当前表格数据作为提示内容提供给 CLI。",
+            size=12,
+            color="#667085",
+            visible=agent_settings["provider"] == "cursor",
+        )
+        cursor_agent_warning = ft.Container(
+            content=ft.Text(
+                "Agent 模式可调用 Cursor CLI 的本机工具，包括终端命令和文件操作。"
+                "CLI 子进程不是安全沙箱；请仅在信任请求内容时使用。"
+                "工具仍只会把表格修改作为预览，不会自动应用到配置表。",
+                size=12,
+                color="#93370D",
+            ),
+            bgcolor="#FFFAEB",
+            border_radius=8,
+            padding=10,
+            visible=(
+                agent_settings["provider"] == "cursor"
+                and agent_settings["cursor_mode"] == "agent"
+            ),
+        )
+
+        def refresh_provider_help(_=None):
+            is_api = provider_select.value == "api"
+            api_controls.visible = is_api
+            provider_help.visible = not is_api
+            cursor_mode_select.visible = not is_api
+            cursor_agent_warning.visible = (
+                not is_api and cursor_mode_select.value == "agent"
+            )
+            if is_api:
+                provider_help.value = (
+                    "使用配置的模型服务商 API；当前页数据会发送到该服务。"
+                )
+            else:
+                provider_help.value = (
+                    "使用 Cursor CLI 自己的登录状态，并在临时目录中运行；"
+                    "当前表格数据作为提示内容提供给 CLI。"
+                )
+            api_privacy_note.visible = is_api
+            remove_key_button.visible = is_api
+            page.update()
+
+        provider_select.on_select = refresh_provider_help
+        cursor_mode_select.on_select = refresh_provider_help
+
+        def refresh_credential_status():
+            try:
+                credential_status.value = (
+                    "系统凭据库中已保存 API Key。"
+                    if load_api_key()
+                    else "尚未保存 API Key。"
+                )
+                credential_status.color = "#667085"
+            except RuntimeError as exc:
+                credential_status.value = str(exc)
+                credential_status.color = "#D92D20"
+
+        refresh_credential_status()
+
+        def save_agent_connection(_):
+            provider = provider_select.value or "cursor"
+            if provider == "api":
+                try:
+                    base_url, model = validate_api_settings(
+                        base_url_input.value or "",
+                        model_input.value or "",
+                    )
+                except ValueError as exc:
+                    notify(str(exc), error=True)
+                    return
+                api_key = (api_key_input.value or "").strip()
+                if not api_key:
+                    try:
+                        if not load_api_key():
+                            notify("请填写并保存 API Key。", error=True)
+                            return
+                    except RuntimeError as exc:
+                        notify(str(exc), error=True)
+                        return
+                if api_key:
+                    try:
+                        save_api_key(api_key)
+                    except RuntimeError as exc:
+                        notify(str(exc), error=True)
+                        return
+                agent_settings.update(
+                    {
+                        "provider": provider,
+                        "base_url": base_url,
+                        "model": model,
+                    }
+                )
+            else:
+                agent_settings.update(
+                    {
+                        "provider": "cursor",
+                        "cursor_mode": cursor_mode_select.value or "ask",
+                    }
+                )
+            save_export_settings()
+            page.pop_dialog()
+            notify("Agent 连接设置已保存")
+
+        def remove_api_key(_):
+            try:
+                if load_api_key():
+                    save_api_key(None)
+                api_key_input.value = ""
+                refresh_credential_status()
+                page.update()
+            except RuntimeError as exc:
+                notify(str(exc), error=True)
+
+        remove_key_button.on_click = remove_api_key
+        show_alert_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("AI 服务与连接"),
+                content=ft.Column(
+                    [
+                        provider_select,
+                        cursor_mode_select,
+                        provider_help,
+                        cursor_agent_warning,
+                        api_controls,
+                        api_privacy_note,
+                        remove_key_button,
+                    ],
+                    tight=True,
+                    spacing=10,
+                    width=dialog_width(520),
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                actions=[
+                    ft.TextButton("保存连接", on_click=save_agent_connection),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def open_ai_agent(_):
+        history: list[dict[str, str]] = []
+        messages_view = ft.Column(
+            spacing=10,
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+        )
+        prompt_input = ft.TextField(
+            hint_text="描述你想调整的配置，例如：给这些道具补充简短描述",
+            multiline=True,
+            min_lines=2,
+            max_lines=5,
+            expand=True,
+        )
+        send_button = ft.Button(
+            "发送",
+            icon=ft.Icons.SEND,
+        )
+        pending_preview = ft.Column(spacing=6)
+        agent_provider_text = ft.Text(
+            (
+                "Cursor Agent CLI（"
+                + ("Agent" if agent_settings["cursor_mode"] == "agent" else "Ask")
+                + "）"
+            )
+            if agent_settings["provider"] == "cursor"
+            else f"OpenAI 兼容 API · {agent_settings['model'] or '未设置模型'}",
+            size=11,
+            color="#667085",
+        )
+
+        def add_agent_message(label: str, message: str, color: str):
+            messages_view.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(label, size=11, weight=ft.FontWeight.W_600),
+                            ft.Text(message, size=13, selectable=True),
+                        ],
+                        spacing=4,
+                    ),
+                    bgcolor=color,
+                    border_radius=10,
+                    padding=12,
+                )
+            )
+
+        async def send_agent_message(_):
+            prompt = (prompt_input.value or "").strip()
+            if not prompt:
+                notify("请先输入 Agent 请求。", error=True)
+                return
+            if not columns:
+                notify("当前配置表没有可用字段。", error=True)
+                return
+            prompt_input.value = ""
+            send_button.disabled = True
+            add_agent_message("你", prompt, "#EEF0FF")
+            working_message = ft.Text("Agent 正在分析当前页…", size=12, color="#667085")
+            messages_view.controls.append(working_message)
+            page.update()
+
+            start = current_page * page_size
+            end = min(start + page_size, len(rows))
+            visible_rows = [
+                (index + 1, copy.deepcopy(rows[index]))
+                for index in range(start, end)
+            ]
+            prior_history = copy.deepcopy(history)
+            try:
+                if agent_settings["provider"] == "cursor":
+                    response = await request_cursor_proposal(
+                        prior_history,
+                        columns.copy(),
+                        data_types.copy(),
+                        source_name,
+                        visible_rows,
+                        prompt,
+                        agent_settings["cursor_mode"],
+                    )
+                else:
+                    base_url, model = validate_api_settings(
+                        agent_settings["base_url"],
+                        agent_settings["model"],
+                    )
+                    api_key = load_api_key()
+                    if not api_key:
+                        raise RuntimeError(
+                            "系统凭据库中没有 API Key。请打开「AI 服务与连接」进行配置。"
+                        )
+                    response = await request_api_proposal(
+                        base_url,
+                        model,
+                        api_key,
+                        prior_history,
+                        columns.copy(),
+                        data_types.copy(),
+                        source_name,
+                        visible_rows,
+                        prompt,
+                    )
+                proposal = parse_agent_proposal(response)
+            except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+                working_message.value = f"请求失败：{exc}"
+                working_message.color = "#D92D20"
+                send_button.disabled = False
+                page.update()
+                return
+
+            working_message.value = proposal["message"]
+            history.extend(
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": response},
+                ]
+            )
+            pending_preview.controls.clear()
+            if not proposal["changes"]:
+                pending_preview.controls.append(
+                    ft.Text("没有建议的修改。", size=12, color="#667085")
+                )
+                send_button.disabled = False
+                page.update()
+                return
+
+            candidate_rows = copy.deepcopy(rows)
+            original_rows = copy.deepcopy(rows)
+            original_columns = columns.copy()
+            preview_lines = []
+            seen_cells: set[tuple[int, str]] = set()
+            visible_numbers = {number for number, _ in visible_rows}
+            validation_error = None
+            for change in proposal["changes"]:
+                row_number = change["row"]
+                column = change["column"]
+                cell = (row_number, column)
+                if row_number not in visible_numbers:
+                    validation_error = (
+                        f"第 {row_number} 行不在当前可见页，已拒绝应用建议。"
+                    )
+                    break
+                if column not in columns:
+                    validation_error = f"不存在字段「{column}」，已拒绝应用建议。"
+                    break
+                if cell in seen_cells:
+                    validation_error = (
+                        f"Agent 对第 {row_number} 行「{column}」给出重复修改，已拒绝。"
+                    )
+                    break
+                if change["value"] is None:
+                    validation_error = "Agent 提议了 null 值，已拒绝应用建议。"
+                    break
+                try:
+                    new_value = parse_data_value(
+                        change["value"],
+                        data_types[columns.index(column)],
+                    )
+                except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                    validation_error = (
+                        f"第 {row_number} 行字段「{column}」类型无效：{exc}"
+                    )
+                    break
+                if new_value is None:
+                    validation_error = (
+                        f"第 {row_number} 行字段「{column}」为空，已拒绝应用建议。"
+                    )
+                    break
+                seen_cells.add(cell)
+                previous_value = candidate_rows[row_number - 1].get(column)
+                candidate_rows[row_number - 1][column] = new_value
+                preview_lines.append(
+                    ft.Text(
+                        f"第 {row_number} 行 · {column}："
+                        f"{_display_value(previous_value) or '（空）'} → "
+                        f"{_display_value(new_value)}",
+                        size=12,
+                        selectable=True,
+                    )
+                )
+
+            if validation_error:
+                pending_preview.controls.append(
+                    ft.Text(validation_error, size=12, color="#D92D20")
+                )
+                send_button.disabled = False
+                page.update()
+                return
+
+            preview_title = ft.Text(
+                f"修改预览（{len(preview_lines)} 项）",
+                size=13,
+                weight=ft.FontWeight.W_600,
+            )
+
+            def discard_agent_proposal(_):
+                pending_preview.controls.clear()
+                page.update()
+
+            def apply_agent_proposal(_):
+                if (
+                    source_name != source_text.value
+                    or columns != original_columns
+                    or rows != original_rows
+                ):
+                    pending_preview.controls.clear()
+                    pending_preview.controls.append(
+                        ft.Text(
+                            "配置表已变化，旧预览已作废，请重新请求 Agent。",
+                            size=12,
+                            color="#D92D20",
+                        )
+                    )
+                    page.update()
+                    return
+                record_row_undo()
+                rows[:] = candidate_rows
+                mark_active_table_modified()
+                refresh_table()
+                pending_preview.controls.clear()
+                notify(f"已应用 {len(preview_lines)} 项 Agent 修改，可用 Ctrl+Z 撤销。")
+                page.update()
+
+            pending_preview.controls.extend(
+                [
+                    preview_title,
+                    *preview_lines,
+                    ft.Row(
+                        [
+                            ft.OutlinedButton(
+                                "丢弃",
+                                on_click=discard_agent_proposal,
+                            ),
+                            ft.Button(
+                                "确认应用",
+                                icon=ft.Icons.CHECK,
+                                on_click=apply_agent_proposal,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                ]
+            )
+            send_button.disabled = False
+            page.update()
+
+        send_button.on_click = send_agent_message
+        settings_button = ft.IconButton(
+            icon=ft.Icons.SETTINGS_OUTLINED,
+            tooltip="AI 服务与连接",
+            on_click=open_agent_settings,
+        )
+        show_alert_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Row(
+                    [
+                        ft.Text("AI Agent"),
+                        ft.Container(expand=True),
+                        agent_provider_text,
+                        settings_button,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            f"仅向 Agent 提供当前配置表的当前页（第 "
+                            f"{current_page * page_size + 1 if rows else 0}–"
+                            f"{min((current_page + 1) * page_size, len(rows))} 行）。"
+                            "发送请求时会将该页数据传给所选服务。建议先预览，再确认应用；"
+                            "不会自动写入 TSV。Cursor Agent 模式还可调用本机工具。",
+                            size=11,
+                            color="#667085",
+                        ),
+                        messages_view,
+                        pending_preview,
+                        ft.Row([prompt_input, send_button], spacing=8),
+                    ],
+                    width=dialog_width(760),
+                    height=dialog_height(680, margin=140),
+                    spacing=10,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                actions=[
+                    ft.TextButton("完成", on_click=lambda _: page.pop_dialog()),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
     def add_column(_):
         form_error = ft.Text(
             "",
@@ -3512,6 +4038,12 @@ def main(page: ft.Page):
     header_actions = ft.Row(
         [
             mobile_configuration_button,
+            ft.OutlinedButton(
+                "AI Agent",
+                icon=ft.Icons.SMART_TOY,
+                on_click=open_ai_agent,
+                visible=not mobile_platform,
+            ),
             ft.OutlinedButton(
                 "导出设置",
                 icon=ft.Icons.SETTINGS_OUTLINED,
