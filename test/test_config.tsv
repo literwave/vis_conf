@@ -1,0 +1,5 @@
+id	name	icon_path
+integer	string	string
+both	both	frontend
+唯一标识	示例名称	图标路径（相对当前 TSV）
+1	图标路径示例	../assets/assistant-icon.png

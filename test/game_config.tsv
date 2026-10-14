@@ -1,0 +1,7 @@
+id	name	tags	properties	enabled
+integer	string	lua_array	lua_object	boolean
+both	both	frontend	backend	both
+唯一标识	道具名称	客户端标签	服务端属性	是否启用
+1001	新手长剑	{ "weapon", "starter" }	{ attack = 12, level = 1 }	true
+1002	旅人法杖	{ "weapon", "magic" }	{ attack = 8, mana = 20 }	true
+1003	生命药水	{ "consumable", "healing" }	{ heal = 50, stack = 99 }	false

@@ -1,0 +1,8 @@
+id	level	reward_id	count	mail_title
+integer	integer	integer	integer	string
+both	both	both	both	backend
+奖励记录编号	等级	奖励物品编号	数量	邮件标题
+1	5	9001	3	等级达到 5 级奖励
+2	10	9002	1	等级达到 10 级奖励
+3	15	9003	5	等级达到 15 级奖励
+4	20	9010	1	等级达到 20 级奖励

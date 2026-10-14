@@ -1,0 +1,8 @@
+id	name	cooldown	target	level_values	effects
+integer	string	number	string	json	lua_array
+both	both	both	both	both	both
+技能编号	技能名称	冷却秒数	目标类型	等级成长数值	效果列表
+1001	迅斩	1.5	单体	{"1":1.0,"2":1.2,"3":1.5}	{ "damage", "bleed" }
+1002	守护姿态	12	自身	{"1":5,"2":8,"3":12}	{ "shield", "taunt" }
+2001	星火	2.25	范围	{"1":18,"2":26,"3":35}	{ "magic_damage", "burn" }
+3001	穿叶箭	4	单体	{"1":14,"2":20,"3":29}	{ "pierce", "slow" }

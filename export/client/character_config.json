@@ -1,0 +1,65 @@
+{
+  "101": {
+    "id": 101,
+    "name": "旅人剑士",
+    "class": "战士",
+    "level_cap": 60,
+    "base_stats": {
+      "hp": 120,
+      "attack": 18,
+      "defense": 12
+    },
+    "skills": [
+      1001,
+      1002
+    ],
+    "spawn": {
+      "map": "start_village",
+      "x": 12,
+      "y": 8
+    },
+    "enabled": true
+  },
+  "102": {
+    "id": 102,
+    "name": "星语法师",
+    "class": "法师",
+    "level_cap": 60,
+    "base_stats": {
+      "hp": 80,
+      "attack": 25,
+      "defense": 5
+    },
+    "skills": [
+      2001,
+      2002
+    ],
+    "spawn": {
+      "map": "start_village",
+      "x": 16,
+      "y": 8
+    },
+    "enabled": true
+  },
+  "103": {
+    "id": 103,
+    "name": "林间游侠",
+    "class": "射手",
+    "level_cap": 55,
+    "base_stats": {
+      "hp": 95,
+      "attack": 21,
+      "defense": 8
+    },
+    "skills": [
+      3001,
+      3002
+    ],
+    "spawn": {
+      "map": "forest_edge",
+      "x": 4,
+      "y": 21
+    },
+    "enabled": false
+  }
+}

@@ -1,0 +1,7 @@
+id	name	area	hp	attack	drops	attributes
+integer	string	string	integer	number	lua_array	lua_object
+both	both	both	both	both	both	backend
+怪物编号	怪物名称	出没区域	生命值	攻击力	掉落物品	服务端属性
+5001	森林史莱姆	forest	80	7.5	{ 9001, 9002 }	{ exp = 12, respawn = 8 }
+5002	洞穴蝙蝠	cave	125	11	{ 9003 }	{ exp = 20, flying = true }
+5003	遗迹守卫	ruins	640	38.5	{ 9010, 9011, 9012 }	{ exp = 150, armor = 24 }

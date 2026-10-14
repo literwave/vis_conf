@@ -1,0 +1,7 @@
+id	name	class	level_cap	base_stats	skills	spawn	enabled
+integer	string	string	integer	lua_object	lua_array	json	boolean
+both	both	both	both	both	both	frontend	both
+角色编号	角色名称	职业	等级上限	基础属性	初始技能	出生点配置	是否启用
+101	旅人剑士	战士	60	{ hp = 120, attack = 18, defense = 12 }	{ 1001, 1002 }	{"map":"start_village","x":12,"y":8}	true
+102	星语法师	法师	60	{ hp = 80, attack = 25, defense = 5 }	{ 2001, 2002 }	{"map":"start_village","x":16,"y":8}	true
+103	林间游侠	射手	55	{ hp = 95, attack = 21, defense = 8 }	{ 3001, 3002 }	{"map":"forest_edge","x":4,"y":21}	false

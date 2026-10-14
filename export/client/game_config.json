@@ -1,0 +1,29 @@
+{
+  "1001": {
+    "id": 1001,
+    "name": "新手长剑",
+    "tags": [
+      "weapon",
+      "starter"
+    ],
+    "enabled": true
+  },
+  "1002": {
+    "id": 1002,
+    "name": "旅人法杖",
+    "tags": [
+      "weapon",
+      "magic"
+    ],
+    "enabled": true
+  },
+  "1003": {
+    "id": 1003,
+    "name": "生命药水",
+    "tags": [
+      "consumable",
+      "healing"
+    ],
+    "enabled": false
+  }
+}
