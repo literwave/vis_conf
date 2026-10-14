@@ -3,9 +3,12 @@ import csv
 import copy
 import io
 import json
+import logging
 import math
 import os
 import re
+import shutil
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,7 @@ import flet as ft
 
 PAGE_SIZES = (10, 20, 50, 100)
 MAX_ROW_UNDO = 50
+logger = logging.getLogger(__name__)
 SAMPLE_COLUMNS = ["id", "name", "type", "rarity", "price"]
 DATA_TYPES = {
     "string": "字符串",
@@ -53,6 +57,53 @@ SAMPLE_ROWS = [
     {"id": 1017, "name": "橡木弓", "type": "武器", "rarity": "普通", "price": 150},
     {"id": 1018, "name": "净化药剂", "type": "消耗品", "rarity": "精良", "price": 230},
 ]
+
+
+def _rename_flet_cache_directory(source, target, original_rename, sleep=time.sleep):
+    source = Path(source)
+    target = Path(target)
+    is_flet_cache_rename = (
+        source.parent == target.parent
+        and target.name.startswith("flet-desktop-")
+        and source.name.startswith(f"{target.name}.")
+    )
+    if not is_flet_cache_rename:
+        return original_rename(source, target)
+
+    max_attempts = 7
+    for attempt in range(max_attempts):
+        try:
+            return original_rename(source, target)
+        except PermissionError:
+            cached_client = target / "flet" / "flet.exe"
+            if cached_client.is_file():
+                shutil.rmtree(source, ignore_errors=True)
+                logger.warning(
+                    "Flet runtime cache already exists; using the completed cache at %s",
+                    target,
+                )
+                return target
+            if attempt == max_attempts - 1:
+                raise
+            delay = min(0.25 * (2**attempt), 2.0)
+            logger.warning(
+                "Flet runtime cache rename was denied; retrying in %.2f seconds",
+                delay,
+            )
+            sleep(delay)
+
+
+def _prepare_flet_desktop_runtime():
+    import flet_desktop
+
+    original_rename = Path.rename
+    Path.rename = lambda source, target: _rename_flet_cache_directory(
+        source, target, original_rename
+    )
+    try:
+        flet_desktop.ensure_client_cached()
+    finally:
+        Path.rename = original_rename
 
 
 def _app_settings_path() -> Path:
@@ -3785,4 +3836,6 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        _prepare_flet_desktop_runtime()
     ft.run(main, view=ft.AppView.FLET_APP)

@@ -3,5 +3,28 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+# Flet/PyInstaller build outputs and generated specs
 build/
 dist/
+*.spec
+# Local environment variables and machine-specific settings
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+*.local.*
+settings.local.json
+# Private signing keys and local credentials
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+secrets.yaml
+secrets.yml
+# Local logs and operating-system metadata
+*.log
+Thumbs.db
+.DS_Store

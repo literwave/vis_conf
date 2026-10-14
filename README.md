@@ -2,7 +2,7 @@
 
 基于 Flet 的游戏配置表工具，使用 TSV（制表符分隔的纯文本）配置格式。提供行列统计、自定义列及注释、分页预览、单元格点击编辑，以及分别导出后端和前端配置；支持 Windows 桌面及 Android 手机。
 
-首次运行需要准备 Flet 桌面运行时；首次安装依赖和运行时需要联网。桌面模式提供系统文件夹选择器，导出文件会写入选择的本机目录。Android 使用系统文件选择器，不需要用户手动配置存储权限。
+首次运行需要准备 Flet 桌面运行时；首次安装依赖和运行时需要联网。Windows 启动时会对 Flet 运行时缓存目录重命名遇到的 `PermissionError` 进行短暂重试；如果另一个启动进程已生成完整缓存，则复用该缓存。桌面模式提供系统文件夹选择器，导出文件会写入选择的本机目录。Android 使用系统文件选择器，不需要用户手动配置存储权限。
 
 ## 运行
 
@@ -10,6 +10,33 @@
 python -m pip install -r requirements-desktop.txt
 python app.py
 ```
+
+### Windows 安装包
+
+安装包使用 Flet/PyInstaller 构建应用目录，再由 Inno Setup 生成可安装、可卸载的安装程序。需要 Windows x64、Python 环境及 Inno Setup 6。当前生成的安装包和程序尚未进行代码签名；启用了 Smart App Control 或企业代码完整性策略的 Windows 设备可能会拦截程序。对外发布时建议使用受信任的代码签名证书签名后再分发。
+
+```powershell
+python -m pip install "flet[cli]>=1.0.0,<2.0.0"
+.\build_installer.ps1
+```
+
+运行构建脚本会同时生成安装程序 `dist/installer/StarMap-Setup-1.0.0.exe` 和便携版压缩包 `dist/portable/StarMap-Portable-1.0.0.zip`。安装版默认安装至 `%LOCALAPPDATA%\Programs\GameConfigAssistant`，主程序名为 `star_map.exe`；便携版解压后运行 `star_map/star_map.exe`，示例表位于同目录的 `examples/test/`。可通过参数指定版本，例如 `.\build_installer.ps1 -Version 1.1.0`。便携压缩包不会绕过 Windows 对未签名程序的应用控制拦截。
+
+#### Windows 提示“智能应用控制已阻止可能不安全的应用”时
+
+这是 Windows 无法验证未签名程序的发布者时可能出现的安全拦截。安装器和安装后的 `star_map.exe` 是不同程序：安装器能够打开或完成安装，不代表 Windows 会允许主程序启动。改文件名、以管理员身份运行或改用 ZIP 都不能单独解除智能应用控制；Windows 当前也不提供针对单个应用的“允许运行”按钮。
+
+- **仅在自己的设备使用（会降低防护能力）：**
+  1. 打开“开始”菜单，搜索并打开“Windows 安全中心”。
+  2. 进入“应用和浏览器控制” → “智能应用控制设置”，选择“关闭”。如果该选项不可用，设备可能受组织策略管理，请联系管理员，不要尝试绕过策略。
+  3. 再运行 `dist/installer/StarMap-Setup-1.0.0.exe` 安装；或先解压 `dist/portable/StarMap-Portable-1.0.0.zip`，再运行 `star_map/star_map.exe`。
+  4. 安装版可从开始菜单启动“星图 游戏配置导表工具”；便携版直接运行解压目录中的程序。
+
+  关闭智能应用控制会降低设备的防护能力，而且设置可能持续生效；仅在自己信任该程序并理解风险时才这样做。不要为了运行来历不明的程序关闭此保护。
+- **怀疑是误报：**可通过 [Microsoft 安全情报文件分析](https://www.microsoft.com/wdsi/filesubmission)提交文件供评估；提交不保证会解除拦截。
+- **面向公众分发：**优先考虑通过 Microsoft Store 发布，或使用受信任的代码签名证书签署程序和安装器。ZIP 只是打包形式，不会改变程序的签名状态。
+
+更多信息请参阅 [Microsoft 智能应用控制常见问题](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)。
 
 ### Android 手机
 
