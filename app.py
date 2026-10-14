@@ -474,7 +474,20 @@ def export_json_data(
     if any(key_column not in columns for key_column in (key_columns or [])):
         raise ValueError("导出 key 字段必须来自当前配置表。")
     data = _index_export_records(records, key_columns, json_keys=True)
+    data = _omit_null_values(data)
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _omit_null_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _omit_null_values(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, list):
+        return [_omit_null_values(item) for item in value if item is not None]
+    return value
 
 
 def _lua_value(value: Any) -> str:
@@ -556,6 +569,7 @@ def export_lua(
     if any(key_column not in columns for key_column in (key_columns or [])):
         raise ValueError("导出 key 字段必须来自当前配置表。")
     data = _index_export_records(records, key_columns)
+    data = _omit_null_values(data)
     source_label = source_name or "未知配置表"
     header = (
         "-- author: liter_wave\n"

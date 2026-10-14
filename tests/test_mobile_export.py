@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 import zipfile
@@ -6,6 +7,8 @@ from pathlib import Path
 
 from app import (
     build_export_archive,
+    export_json_data,
+    export_lua,
     insert_row_copy,
     load_table,
     move_row,
@@ -15,6 +18,43 @@ from app import (
 
 
 class BuildExportArchiveTests(unittest.TestCase):
+    def test_json_export_omits_null_fields_and_array_items(self):
+        exported = export_json_data(
+            ["id", "optional", "details"],
+            ["integer", "string", "json"],
+            [
+                {
+                    "id": 1,
+                    "optional": None,
+                    "details": '{"skip": null, "items": [null, 2, {"skip": null, "keep": true}]}',
+                }
+            ],
+            key_columns=["id"],
+        )
+
+        self.assertEqual(
+            json.loads(exported),
+            {"1": {"id": 1, "details": {"items": [2, {"keep": True}]}}},
+        )
+
+    def test_lua_export_omits_null_fields_and_array_items(self):
+        exported = export_lua(
+            ["id", "optional", "details"],
+            ["integer", "string", "lua_object"],
+            [
+                {
+                    "id": 1,
+                    "optional": None,
+                    "details": "{ skip = nil, items = { nil, 2, { skip = nil, keep = true } } }",
+                }
+            ],
+            key_columns=["id"],
+        ).decode("utf-8")
+
+        self.assertNotIn("nil", exported)
+        self.assertIn('["items"] = {\n                2,', exported)
+        self.assertIn('["keep"] = true', exported)
+
     def test_rows_can_be_reordered_and_copied_without_sharing_nested_values(self):
         rows = [
             {"id": 1, "meta": {"tags": ["old"]}},
