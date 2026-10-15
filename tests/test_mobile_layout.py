@@ -53,12 +53,30 @@ class MobileLayoutTests(unittest.TestCase):
     def _table_rows(page):
         table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
         table_area = table_card.content.controls[3]
-        grid = table_area.controls[0].controls[0]
+        grid = table_area.controls[0].controls[0].content.controls[0]
         return [
             control
             for control in grid.content.controls
             if isinstance(control, ft.DragTarget)
         ]
+
+    @staticmethod
+    def _click_labeled(root, label):
+        def walk(control, seen):
+            if control is None or id(control) in seen:
+                return None
+            seen.add(id(control))
+            if getattr(control, "content", None) == label and callable(
+                getattr(control, "on_click", None)
+            ):
+                return control
+            for child in getattr(control, "controls", None) or []:
+                found = walk(child, seen)
+                if found is not None:
+                    return found
+            return walk(getattr(control, "content", None), seen)
+
+        walk(root, set()).on_click(None)
 
     @staticmethod
     def _row_ids(page):
@@ -67,9 +85,40 @@ class MobileLayoutTests(unittest.TestCase):
             for row in MobileLayoutTests._table_rows(page)
         ]
 
+    def test_horizontal_scrollbar_stays_at_visible_table_bottom(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
+            main(page)
+
+        table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+        table_area = table_card.content.controls[3]
+        horizontal_row = table_area.controls[0]
+        scroll_host = horizontal_row.controls[0]
+        vertical_column = scroll_host.content
+        grid = vertical_column.controls[0]
+        self.assertIsInstance(horizontal_row.scroll, ft.Scrollbar)
+        self.assertTrue(horizontal_row.scroll.interactive)
+        self.assertTrue(horizontal_row.scroll.thumb_visibility)
+        self.assertTrue(horizontal_row.scroll.track_visibility)
+        self.assertEqual(vertical_column.scroll, ft.ScrollMode.AUTO)
+        self.assertEqual(scroll_host.width, grid.width)
+        self.assertGreater(scroll_host.width, 0)
+        self.assertTrue(horizontal_row.expand)
+        self.assertIsNone(horizontal_row.height)
+        self.assertIsNone(scroll_host.height)
+        self.assertIsNone(vertical_column.height)
+        self.assertEqual(
+            horizontal_row.vertical_alignment, ft.CrossAxisAlignment.STRETCH
+        )
+        self.assertIsNone(getattr(table_area, "scroll", None))
+
+        page.on_resize(None)
+        self.assertIs(table_area.controls[0], horizontal_row)
+
     def test_phone_layout_hides_sidebar_and_recovers_on_wide_resize(self):
         page = FakePage(width=390)
-        with patch("app._load_app_settings", return_value=({}, None)):
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
             main(page)
 
         workspace = page.controls[0]
@@ -80,8 +129,14 @@ class MobileLayoutTests(unittest.TestCase):
         metrics_row, table_card = content_body.content.controls
         footer_row = table_card.content.controls[-1]
         page_size_select = footer_row.controls[0].controls[1]
-        self.assertEqual(page_size_select.width, 104)
-        self.assertEqual(page_size_select.menu_width, 112)
+        self.assertIsInstance(page_size_select, ft.PopupMenuButton)
+        self.assertEqual(page_size_select.content.height, 34)
+        self.assertEqual(page_size_select.content.border_radius, 17)
+        page_size_select.items[1].on_click(None)
+        self.assertEqual(
+            page_size_select.content.content.controls[0].value, "20 条/页"
+        )
+        self.assertEqual(page.theme.font_family, "Microsoft YaHei UI")
         self.assertFalse(sidebar.visible)
         self.assertIsNone(sidebar_content.scroll)
         configuration_file_list_container = sidebar_content.controls[6]
@@ -129,14 +184,14 @@ class MobileLayoutTests(unittest.TestCase):
             page.platform = ft.PagePlatform.WINDOWS
             with (
                 patch(
-                    "app._load_app_settings",
+                    "app_settings._load_app_settings",
                     return_value=(
                         {"configuration_directory": str(config_directory)},
                         None,
                     ),
                 ),
                 patch(
-                    "app._app_settings_path",
+                    "app_settings._app_settings_path",
                     return_value=Path(temporary_directory) / "settings.json",
                 ),
             ):
@@ -163,7 +218,7 @@ class MobileLayoutTests(unittest.TestCase):
     def test_drag_copy_paste_and_undo_row_actions(self):
         page = FakePage(width=1260)
         page.platform = ft.PagePlatform.WINDOWS
-        with patch("app._load_app_settings", return_value=({}, None)):
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
             main(page)
 
         table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
@@ -253,13 +308,13 @@ class MobileLayoutTests(unittest.TestCase):
             page.platform = ft.PagePlatform.WINDOWS
             with (
                 patch(
-                    "app._load_app_settings",
+                    "app_settings._load_app_settings",
                     return_value=(
                         {"configuration_directory": str(configuration_directory)},
                         None,
                     ),
                 ),
-                patch("app._app_settings_path", return_value=settings_path),
+                patch("app_settings._app_settings_path", return_value=settings_path),
             ):
                 main(page)
 
@@ -305,10 +360,14 @@ class MobileLayoutTests(unittest.TestCase):
             )
             page.dialogs[-1].title.controls[2].on_click(None)
 
-    def test_unavailable_saved_directory_is_preserved_without_blocking_startup(self):
+    def test_missing_saved_directory_uses_default_without_notice(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            missing_directory = Path(temporary_directory) / "deleted-configs"
-            settings_path = Path(temporary_directory) / "settings.json"
+            root = Path(temporary_directory)
+            missing_directory = root / "deleted-configs"
+            current_directory = root / "tsv"
+            current_directory.mkdir()
+            (current_directory / "Hero.tsv").write_text("id\n", encoding="utf-8")
+            settings_path = root / "settings.json"
             original_settings = {
                 "configuration_directory": str(missing_directory),
                 "export_paths": {"backend": "backend-output"},
@@ -321,73 +380,209 @@ class MobileLayoutTests(unittest.TestCase):
             page.platform = ft.PagePlatform.WINDOWS
             with (
                 patch(
-                    "app._load_app_settings",
+                    "app_settings._load_app_settings",
                     return_value=(
                         {"configuration_directory": str(missing_directory)},
                         None,
                     ),
                 ),
-                patch("app._app_settings_path", return_value=settings_path),
+                patch("app_settings._app_settings_path", return_value=settings_path),
+                patch(
+                    "config_directory.resolve_current_configuration_directory",
+                    return_value=current_directory,
+                ),
             ):
                 main(page)
 
-            self.assertEqual(len(page.controls), 1)
-            self.assertEqual(len(page.dialogs), 1)
-            self.assertEqual(page.dialogs[0].bgcolor, "#344054")
-            self.assertIn("原路径已保留", page.dialogs[0].content.value)
-            unavailable_notice = (
-                page.controls[0]
-                .controls[0]
-                .content.controls[6]
-                .content.controls[0]
+            self.assertEqual(page.dialogs, [])
+            file_list = page.controls[0].controls[0].content.controls[6].content
+            self.assertTrue(
+                any(
+                    getattr(control, "tooltip", None) == str(current_directory / "Hero.tsv")
+                    for control in file_list.controls
+                )
             )
-            self.assertEqual(
-                unavailable_notice.controls[1].value,
-                "配置目录暂不可用",
-            )
-            self.assertEqual(
-                unavailable_notice.controls[2].value,
-                "检查磁盘或网络，或重新选择目录。",
-            )
-            self.assertEqual(
-                unavailable_notice.controls[3].content,
-                "更换目录",
-            )
-            self.assertIsNotNone(unavailable_notice.controls[3].on_click)
             self.assertEqual(
                 json.loads(settings_path.read_text(encoding="utf-8")),
                 original_settings,
             )
 
-    def test_reselecting_unavailable_directory_does_not_reuse_stale_picker_path(self):
+    def test_directory_picker_starts_from_fallback_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            missing_directory = Path(temporary_directory) / "deleted-configs"
+            root = Path(temporary_directory)
+            missing_directory = root / "deleted-configs"
+            current_directory = root / "tsv"
+            current_directory.mkdir()
+            (current_directory / "Hero.tsv").write_text("id\n", encoding="utf-8")
             page = FakePage(width=1260)
             page.platform = ft.PagePlatform.WINDOWS
             picker = FakeDirectoryPicker()
             with (
                 patch(
-                    "app._load_app_settings",
+                    "app_settings._load_app_settings",
                     return_value=(
                         {"configuration_directory": str(missing_directory)},
                         None,
                     ),
                 ),
-                patch("app.ft.FilePicker", return_value=picker),
+                patch("editor_session.ft.FilePicker", return_value=picker),
+                patch(
+                    "config_directory.resolve_current_configuration_directory",
+                    return_value=current_directory,
+                ),
+            ):
+                main(page)
+                header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
+                export_button = next(
+                    control
+                    for control in header_actions.controls
+                    if getattr(control, "content", None) == "导出设置"
+                )
+                export_button.on_click(None)
+                choose_directory = page.dialogs[-1].content.controls[1].controls[1]
+                asyncio.run(choose_directory.on_click(None))
+
+            self.assertEqual(
+                picker.calls[0]["initial_directory"],
+                str(current_directory),
+            )
+
+    def test_resolve_current_directory_prefers_nearby_tsv_folder(self):
+        from app import resolve_current_configuration_directory
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            launch_directory = root / "vis_conf"
+            table_directory = root / "tsv"
+            launch_directory.mkdir()
+            table_directory.mkdir()
+            (table_directory / "Item.tsv").write_text("id\n", encoding="utf-8")
+
+            self.assertEqual(
+                resolve_current_configuration_directory(launch_directory),
+                table_directory.resolve(),
+            )
+
+    def test_resolve_current_directory_finds_other_tsv_folder_under_parent(self):
+        from app import resolve_current_configuration_directory
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            launch_directory = root / "vis_conf"
+            table_directory = root / "configs"
+            launch_directory.mkdir()
+            table_directory.mkdir()
+            (table_directory / "Hero.tsv").write_text("id\n", encoding="utf-8")
+
+            self.assertEqual(
+                resolve_current_configuration_directory(launch_directory),
+                table_directory.resolve(),
+            )
+
+    def test_unset_configuration_directory_uses_parent_tsv_search(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            table_directory = root / "tsv"
+            table_directory.mkdir()
+            (table_directory / "Hero.tsv").write_text("id\n", encoding="utf-8")
+            settings_path = root / "settings.json"
+            page = FakePage(width=1260)
+            page.platform = ft.PagePlatform.WINDOWS
+            with (
+                patch("app_settings._load_app_settings", return_value=({}, None)),
+                patch("app_settings._app_settings_path", return_value=settings_path),
+                patch(
+                    "config_directory.resolve_current_configuration_directory",
+                    return_value=table_directory,
+                ),
             ):
                 main(page)
 
-            unavailable_notice = (
-                page.controls[0]
-                .controls[0]
-                .content.controls[6]
-                .content.controls[0]
+            self.assertFalse(settings_path.exists())
+            file_list = page.controls[0].controls[0].content.controls[6].content
+            self.assertTrue(
+                any(
+                    getattr(control, "tooltip", None) == str(table_directory / "Hero.tsv")
+                    for control in file_list.controls
+                )
             )
-            asyncio.run(unavailable_notice.controls[3].on_click(None))
 
-            self.assertEqual(len(picker.calls), 1)
-            self.assertIsNone(picker.calls[0]["initial_directory"])
-            self.assertEqual(len(page.dialogs), 1)
+    def test_agent_apply_writes_open_tsv(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            table_path = root / "Hero.tsv"
+            table_path.write_text(
+                "id\tname\ttype\trarity\tprice\n"
+                "integer\tstring\tstring\tstring\tinteger\n"
+                "both\tboth\tboth\tboth\tboth\n"
+                "标识\t名称\t类型\t品质\t价格\n"
+                "1001\t新手长剑\t武器\t普通\t10\n",
+                encoding="utf-8",
+            )
+            page = FakePage(width=1260)
+            page.platform = ft.PagePlatform.WINDOWS
+            response = json.dumps(
+                {
+                    "message": "建议统一名称。",
+                    "changes": [{"row": 1, "column": "name", "value": "长剑"}],
+                },
+                ensure_ascii=False,
+            )
+            with (
+                patch(
+                    "app_settings._load_app_settings",
+                    return_value=(
+                        {
+                            "configuration_directory": str(root),
+                            "agent": {"provider": "cursor", "cursor_mode": "agent"},
+                        },
+                        None,
+                    ),
+                ),
+                patch(
+                    "app_settings._app_settings_path",
+                    return_value=root / "settings.json",
+                ),
+                patch(
+                    "agent_ui.request_cursor_proposal",
+                    new=AsyncMock(return_value=response),
+                ),
+            ):
+                main(page)
+                file_list = page.controls[0].controls[0].content.controls[6].content
+                next(
+                    control
+                    for control in file_list.controls
+                    if control.tooltip == str(table_path)
+                ).on_click(None)
+                header_actions = (
+                    page.controls[0].controls[1].content.controls[0].content.controls[2]
+                )
+                agent_button = next(
+                    control
+                    for control in header_actions.controls
+                    if getattr(control, "content", None) == "AI Agent"
+                )
+                agent_button.on_click(None)
+                dialog = page.dialogs[-1]
+                prompt_input, send_button = dialog.content.controls[3].controls
+                prompt_input.value = "缩短名称"
+                asyncio.run(send_button.on_click(None))
+
+            unchanged = table_path.read_text(encoding="utf-8")
+            self.assertIn("新手长剑", unchanged)
+            next(
+                action for action in dialog.actions if action.content == "应用到当前表"
+            ).on_click(None)
+
+            saved = table_path.read_text(encoding="utf-8")
+            self.assertIn("长剑", saved)
+            self.assertNotIn("新手长剑", saved)
+            table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+            undo_button = table_card.content.controls[1].controls[0].controls[3]
+            undo_button.on_click(None)
+            restored = table_path.read_text(encoding="utf-8")
+            self.assertIn("新手长剑", restored)
 
     def test_agent_previews_changes_and_applies_only_after_confirmation(self):
         page = FakePage(width=1260)
@@ -402,9 +597,9 @@ class MobileLayoutTests(unittest.TestCase):
             ensure_ascii=False,
         )
         with (
-            patch("app._load_app_settings", return_value=({}, None)),
+            patch("app_settings._load_app_settings", return_value=({}, None)),
             patch(
-                "app.request_cursor_proposal",
+                "agent_ui.request_cursor_proposal",
                 new=AsyncMock(return_value=response),
             ),
         ):
@@ -421,6 +616,25 @@ class MobileLayoutTests(unittest.TestCase):
             messages_view = dialog.content.controls[1]
             pending_preview = dialog.content.controls[2]
             prompt_input, send_button = dialog.content.controls[3].controls
+            self.assertFalse(dialog.scrollable)
+            self.assertIsNone(dialog.content.scroll)
+            self.assertIsNone(dialog.content.height)
+            self.assertFalse(messages_view.expand)
+            self.assertGreaterEqual(messages_view.height, 100)
+            self.assertLessEqual(messages_view.height + 460, page.height)
+            self.assertEqual(messages_view.scroll, ft.ScrollMode.AUTO)
+            self.assertEqual(len(dialog.content.controls), 4)
+            self.assertEqual(dialog.title.controls[-1].tooltip, "关闭")
+            self.assertEqual(dialog.actions[0].content, "完成")
+            dialog.actions[0].on_click(None)
+            self.assertNotIn(dialog, page.dialogs)
+            agent_button.on_click(None)
+            dialog = page.dialogs[-1]
+            messages_view = dialog.content.controls[1]
+            pending_preview = dialog.content.controls[2]
+            prompt_input, send_button = dialog.content.controls[3].controls
+            self.assertTrue(prompt_input.shift_enter)
+            self.assertIs(prompt_input.on_submit, send_button.on_click)
             prompt_input.value = "缩短名称"
             asyncio.run(send_button.on_click(None))
 
@@ -436,17 +650,158 @@ class MobileLayoutTests(unittest.TestCase):
                 )
             )
             self.assertEqual(self._table_rows(page)[0].content.controls[2].content.value, "新手长剑")
+            self.assertFalse(
+                any(action.content == "应用到当前表" for action in dialog.actions)
+            )
+            self.assertEqual(dialog.actions[0].content, "完成")
 
-            pending_preview.controls[-1].controls[1].on_click(None)
+    def test_agent_adds_and_deletes_columns_after_confirmation(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        response = json.dumps(
+            {
+                "message": "调整列。",
+                "changes": [{"row": 1, "column": "desc", "value": "新手武器"}],
+                "column_additions": [
+                    {
+                        "name": "desc",
+                        "type": "string",
+                        "target": "both",
+                        "annotation": "描述",
+                        "default": "",
+                    }
+                ],
+                "column_deletions": ["rarity"],
+            },
+            ensure_ascii=False,
+        )
 
-        self.assertEqual(self._table_rows(page)[0].content.controls[2].content.value, "长剑")
+        def text_values(control, seen=None):
+            if seen is None:
+                seen = set()
+            if control is None or id(control) in seen:
+                return []
+            seen.add(id(control))
+            found = []
+            if isinstance(control, ft.Text) and isinstance(control.value, str):
+                found.append(control.value)
+            for child in getattr(control, "controls", None) or []:
+                found.extend(text_values(child, seen))
+            found.extend(text_values(getattr(control, "content", None), seen))
+            return found
+
+        with (
+            patch(
+                "app_settings._load_app_settings",
+                return_value=(
+                    {"agent": {"provider": "cursor", "cursor_mode": "agent"}},
+                    None,
+                ),
+            ),
+            patch("agent_ui.request_cursor_proposal", new=AsyncMock(return_value=response)),
+            patch(
+                "app_settings._app_settings_path",
+                return_value=Path(tempfile.mkdtemp()) / "settings.json",
+            ),
+        ):
+            main(page)
+            header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
+            agent_button = next(
+                control
+                for control in header_actions.controls
+                if getattr(control, "content", None) == "AI Agent"
+            )
+            agent_button.on_click(None)
+            dialog = page.dialogs[-1]
+            pending_preview = dialog.content.controls[2]
+            prompt_input, send_button = dialog.content.controls[3].controls
+            prompt_input.value = "删掉品质并加描述"
+            asyncio.run(send_button.on_click(None))
+
+            preview_text = " ".join(text_values(pending_preview))
+            self.assertIn("删除列 · rarity", preview_text)
+            self.assertIn("新增列 · desc", preview_text)
+            table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+            self.assertIn("rarity", text_values(table_card))
+            self.assertNotIn("desc", text_values(table_card))
+
+            next(
+                action for action in dialog.actions if action.content == "应用到当前表"
+            ).on_click(None)
+
         table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+        applied = text_values(table_card)
+        self.assertNotIn("rarity", applied)
+        self.assertIn("desc", applied)
+        self.assertIn("新手武器", applied)
         undo_button = table_card.content.controls[1].controls[0].controls[3]
         undo_button.on_click(None)
-        self.assertEqual(
-            self._table_rows(page)[0].content.controls[2].content.value,
-            "新手长剑",
+        restored = text_values(table_card)
+        self.assertIn("rarity", restored)
+        self.assertNotIn("desc", restored)
+
+    def test_title_close_drops_unapplied_preview(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        response = json.dumps(
+            {
+                "message": "已建议新增描述列。",
+                "changes": [],
+                "column_additions": [
+                    {
+                        "name": "desc",
+                        "type": "字符串",
+                        "target": "前后端",
+                        "annotation": "描述",
+                        "default": "",
+                    }
+                ],
+                "column_deletions": [],
+            },
+            ensure_ascii=False,
         )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with (
+                patch("app_settings._load_app_settings", return_value=({}, None)),
+                patch("agent_ui.request_cursor_proposal", new=AsyncMock(return_value=response)),
+                patch(
+                    "app_settings._app_settings_path",
+                    return_value=Path(temporary_directory) / "settings.json",
+                ),
+            ):
+                main(page)
+                header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
+                agent_button = next(
+                    control
+                    for control in header_actions.controls
+                    if getattr(control, "content", None) == "AI Agent"
+                )
+                agent_button.on_click(None)
+                dialog = page.dialogs[-1]
+                prompt_input, send_button = dialog.content.controls[3].controls
+                prompt_input.value = "加一列描述"
+                asyncio.run(send_button.on_click(None))
+
+                def text_values(control, seen=None):
+                    if seen is None:
+                        seen = set()
+                    if control is None or id(control) in seen:
+                        return []
+                    seen.add(id(control))
+                    found = []
+                    if isinstance(control, ft.Text) and isinstance(control.value, str):
+                        found.append(control.value)
+                    for child in getattr(control, "controls", None) or []:
+                        found.extend(text_values(child, seen))
+                    found.extend(text_values(getattr(control, "content", None), seen))
+                    return found
+
+                table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+                next(action for action in dialog.actions if action.content == "完成").on_click(
+                    None
+                )
+                self.assertNotIn(dialog, page.dialogs)
+                self.assertNotIn("desc", text_values(table_card))
 
 
 if __name__ == "__main__":

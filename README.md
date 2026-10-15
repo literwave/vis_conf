@@ -85,22 +85,15 @@ flet build apk --module-name app --project game-config-assistant --org com.liter
 | 复制并插入行 | 选中源行后按 `Ctrl+C`，再选目标行并按 `Ctrl+V`；副本插入目标行之前，不覆盖数据 |
 | 撤销 | 按 `Ctrl+Z` 撤销最近一次编辑、行排序、复制、新增或删除，最多保留 50 步 |
 | 分页 | 可选择每页显示 10、20、50 或 100 行；新增行会追加到表格末尾并跳转到所在页 |
-| AI Agent（桌面端） | 顶部「AI Agent」可连接 Cursor Agent CLI 或 OpenAI 兼容 API；仅提供当前页，确认预览后应用，可用 `Ctrl+Z` 撤销 |
+| AI Agent（桌面端） | 顶部「AI Agent」。Ask 只给预览；Agent 点「应用到当前表」后改当前表并写回 TSV |
 
-复制粘贴快捷键使用应用内行剪贴板，不会替代系统文本剪贴板。编辑和增量导出队列仅保留在当前会话，不会写回原 TSV；切换配置表不会丢失当前会话中的编辑。
+复制粘贴快捷键使用应用内行剪贴板，不会替代系统文本剪贴板。单元格里的手动修改不会写回 TSV。Cursor 的 Agent 模式点「应用到当前表」会写回当前打开的 TSV。切换配置表不会丢失当前会话中的编辑。
 
-### AI Agent（桌面端）
+### 配置 Cursor
 
-点击窗口顶部的「AI Agent」，再点右上角齿轮配置连接方式和模式：
+星图通过本机的 Cursor Agent CLI 改表，用的是 CLI 自己的登录状态，不需要在星图里填 API Key。Android 没有这项功能。
 
-- **Cursor Agent CLI**：按下面的 Windows 安装步骤安装并登录 Cursor CLI。可选 Ask（只读问答）或 Agent（可调用工具）；CLI 在临时目录中启动，当前表当前页的数据作为提示提供。
-- **OpenAI 兼容 API**：填写 HTTPS API 基础地址、模型名和 API Key。API Key 存在系统凭据库中，不会写入 `settings.json`；请求会发送到配置的服务地址。
-
-Agent 只建议修改当前页已有行和列。修改先显示类型校验后的预览；只有点击「确认应用」才会改动当前会话，可用 `Ctrl+Z` 撤销。它不会自动写入 TSV；导出仍由用户操作。Android 暂不提供 Agent 功能。
-
-> Cursor CLI 的 Agent 模式可运行终端命令并读写本机文件；临时工作目录不是安全沙箱。仅在信任请求内容时使用。预览确认只控制本工具对表格的应用，不限制 CLI 的本机工具权限。
-
-#### Windows 安装 Cursor Agent CLI
+#### 1. 安装并登录 CLI
 
 1. 打开 **PowerShell**，运行 Cursor 官方安装命令：
 
@@ -108,19 +101,39 @@ Agent 只建议修改当前页已有行和列。修改先显示类型校验后�
    irm 'https://cursor.com/install?win32=true' | iex
    ```
 
-   如果你不希望执行 PowerShell 安装脚本，可从 [Cursor CLI 官方文档](https://cursor.com/docs/cli)查看最新安装方式。
+   如果不想执行安装脚本，到 [Cursor CLI 官方文档](https://cursor.com/docs/cli)看当前的安装方式。
 
-2. 安装完成后，**关闭并重新打开 PowerShell**，运行以下命令确认 CLI 已加入 PATH：
+2. **关掉这个 PowerShell，再开一个**，确认命令可用：
 
    ```powershell
    agent --version
    ```
 
-3. 运行 `agent`，按 CLI 提示在浏览器中登录 Cursor 账号并完成授权。登录成功后可退出 CLI。
-4. 如果星图在安装 CLI 时已经打开，请完全退出并重新启动星图，让它读取更新后的 PATH。
-5. 在星图顶部打开「AI Agent」，点击右上角齿轮，选择「Cursor Agent CLI」及 Ask 或 Agent 模式，保存连接，再发送请求。
+3. 运行 `agent`，按提示在浏览器里登录 Cursor 账号。登录完成后可以退出 CLI。
+4. 星图如果在安装或登录之前就开着，先完全退出，再重新运行 `python app.py`，否则它读不到更新后的 PATH。
 
-如果提示找不到 Cursor Agent CLI，先在**重新打开的 PowerShell**里再次运行 `agent --version`。若 PowerShell 也找不到命令，请根据官方文档检查安装是否完成及 CLI 所在目录是否已加入用户 PATH，然后重新启动星图。
+PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查安装目录是否在用户 PATH 里，改完后再重启星图。
+
+#### 2. 在星图里选择模式
+
+1. 打开一张配置表。Agent 只看当前页，不看整张表。
+2. 点顶部「AI Agent」，再点右上角齿轮，打开「AI 服务与连接」。
+3. 「连接方式」选 **Cursor Agent CLI**。
+4. 「Cursor CLI 模式」二选一：
+
+   | 模式 | 作用 |
+   |---|---|
+   | Ask（只读问答） | 只显示修改预览，没有「应用到当前表」，不会改表，也不会写文件。这是默认模式。 |
+   | Agent（可调用工具） | 预览之后点「应用到当前表」，修改写入当前表，并保存到打开的 TSV。`Ctrl+Z` 可以撤销，撤销也会写回该 TSV。 |
+
+5. 「Cursor 模型」选 **Auto（CLI 默认）**，或从列表里选一个。列表来自 `agent --list-models`，可以输入名称筛选。读列表失败时，先确认第 1 步的 `agent --version` 能通过。
+6. 点「保存连接」。连接方式、模式和模型写在 `%APPDATA%\GameConfigAssistant\settings.json` 的 `agent` 里。
+
+发请求时，CLI 在临时目录里运行，当前页的数据作为提示传进去。它不会把仓库的 `tsv/` 目录当作工作区。
+
+> Agent 模式除了写当前 TSV，还会让 Cursor CLI 自动执行本机命令。只在信任这次请求时使用。Ask 模式不会改表。
+
+OpenAI 兼容 API 是另一条连接：在同一齿轮里把连接方式改成「OpenAI 兼容 API」，填写 HTTPS 地址、模型名和 API Key。API Key 只进系统凭据库，不写入 `settings.json`。这条连接点「应用到当前表」只改编辑器里的表，不写 TSV。
 
 ## TSV 格式与导出
 

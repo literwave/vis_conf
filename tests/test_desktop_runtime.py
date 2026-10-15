@@ -1,8 +1,11 @@
+import asyncio
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
 from app import _rename_flet_cache_directory
+from desktop_runtime import _forward_client_stderr
 
 
 class FletDesktopCacheTests(unittest.TestCase):
@@ -83,6 +86,22 @@ class FletDesktopCacheTests(unittest.TestCase):
             self.assertEqual(result, target)
             self.assertTrue(executable.is_file())
             self.assertFalse(source.exists())
+
+
+class FletClientStderrTests(unittest.TestCase):
+    def test_libpng_srgb_warning_is_dropped_but_other_errors_pass(self):
+        async def forward():
+            stream = asyncio.StreamReader()
+            stream.feed_data(
+                b"libpng warning: iCCP: known incorrect sRGB profile\r\n"
+                b"real client error\r\n"
+            )
+            stream.feed_eof()
+            output = io.BytesIO()
+            await _forward_client_stderr(stream, output)
+            return output.getvalue()
+
+        self.assertEqual(asyncio.run(forward()), b"real client error\r\n")
 
 
 if __name__ == "__main__":

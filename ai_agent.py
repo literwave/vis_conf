@@ -1,11 +1,14 @@
 import asyncio
 import json
+import os
+import re
 import shutil
-import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 
@@ -14,6 +17,9 @@ CREDENTIAL_USERNAME = "openai-compatible-api-key"
 MAX_AGENT_OUTPUT_BYTES = 2_000_000
 MAX_AGENT_INPUT_BYTES = 1_000_000
 MAX_CURSOR_PROMPT_CHARS = 24_000
+_CURSOR_VERSION_DIR = re.compile(
+    r"^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-\d{2}-\d{2}-\d{2})?-[0-9a-f]+$"
+)
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -83,7 +89,40 @@ def parse_agent_proposal(response: str) -> dict[str, Any]:
             or "value" not in change
         ):
             raise ValueError("修改项需要包含整数 row、字符串 column 和 value。")
-    return {"message": message, "changes": changes}
+    additions = proposal.get("column_additions", [])
+    deletions = proposal.get("column_deletions", [])
+    if not isinstance(additions, list) or not isinstance(deletions, list):
+        raise ValueError("column_additions 和 column_deletions 必须是数组。")
+    for addition in additions:
+        if (
+            not isinstance(addition, dict)
+            or not isinstance(addition.get("name"), str)
+            or ("type" in addition and addition["type"] is not None and not isinstance(addition["type"], str))
+            or (
+                "target" in addition
+                and addition["target"] is not None
+                and not isinstance(addition["target"], str)
+            )
+            or (
+                "annotation" in addition
+                and addition["annotation"] is not None
+                and not isinstance(addition["annotation"], str)
+            )
+        ):
+            raise ValueError(
+                "新增列需要包含字符串 name，以及可选的 type、target、annotation 和 default。"
+            )
+        if not isinstance(addition.get("type"), str) or not addition["type"].strip():
+            addition["type"] = "string"
+    for name in deletions:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("删除列必须是非空列名。")
+    return {
+        "message": message,
+        "changes": changes,
+        "column_additions": additions,
+        "column_deletions": deletions,
+    }
 
 
 def _proposal_instructions(
@@ -92,25 +131,39 @@ def _proposal_instructions(
     source_name: str,
     visible_rows: list[tuple[int, dict[str, Any]]],
     prompt: str,
+    targets: list[str] | None = None,
+    annotations: list[str] | None = None,
 ) -> str:
+    column_info = []
+    for index, name in enumerate(columns):
+        item: dict[str, Any] = {"name": name, "type": data_types[index]}
+        if targets is not None and index < len(targets):
+            item["target"] = targets[index]
+        if annotations is not None and index < len(annotations):
+            item["annotation"] = annotations[index]
+        column_info.append(item)
     table = {
         "source": source_name,
-        "columns": [
-            {"name": name, "type": data_types[index]}
-            for index, name in enumerate(columns)
-        ],
+        "columns": column_info,
         "visible_rows": [
             {"row": row_number, "values": row}
             for row_number, row in visible_rows
         ],
     }
     return (
-        "你是游戏配置表助手。只能根据用户提供的当前 TSV 信息提出单元格修改建议；"
+        "你是游戏配置表助手。可以建议修改当前页已有单元格，以及新增或删除列；"
         "不要声称已修改文件。只返回一个 JSON 对象，形状为 "
-        '{"message":"简要说明","changes":[{"row":1,"column":"name","value":"新值"}]}。'
-        "行号是 TSV 数据区从 1 开始的行号（不包括四行表头），只能修改 visible_rows 中"
-        "出现的已有行；column 必须是现有列名。value 必须是非 null 的 JSON 值，并符合列类型。"
-        "没有需要修改的内容时返回空 changes。不要返回 Markdown 或 JSON 代码围栏。"
+        '{"message":"简要说明","changes":[{"row":1,"column":"name","value":"新值"}],'
+        '"column_additions":[{"name":"desc","type":"string","target":"both",'
+        '"annotation":"说明","default":""}],"column_deletions":["old_column"]}。'
+        "changes 的行号是 TSV 数据区从 1 开始的行号（不包括四行表头），只能修改 "
+        "visible_rows 中出现的已有行。column_deletions 只能填写现有列名，删除会移除该列全部数据。"
+        "column_additions 的 name 不能与现有列或本次其他新增列重复，也不能与 column_deletions 重复。"
+        "type 只能是 string、integer、number、boolean、json、lua_array、lua_object；"
+        "target 只能是 both、backend、frontend，省略时视为 both；annotation 和 default 可省略，省略表示空。"
+        "新增列的 default 会写入所有行；若当前页某行需要不同的值，再用 changes 修改该新列。"
+        "value 和 default 必须符合列类型，且不能是 null。没有需要修改的内容时，changes、"
+        "column_additions、column_deletions 都返回空数组。不要返回 Markdown 或 JSON 代码围栏。"
         f"\n\n当前配置表：\n{json.dumps(table, ensure_ascii=False, separators=(',', ':'))}"
         f"\n\n用户请求：\n{prompt}"
     )
@@ -169,6 +222,8 @@ async def request_api_proposal(
     source_name: str,
     visible_rows: list[tuple[int, dict[str, Any]]],
     prompt: str,
+    targets: list[str] | None = None,
+    annotations: list[str] | None = None,
 ) -> str:
     messages = [
         {
@@ -182,7 +237,13 @@ async def request_api_proposal(
         {
             "role": "user",
             "content": _proposal_instructions(
-                columns, data_types, source_name, visible_rows, prompt
+                columns,
+                data_types,
+                source_name,
+                visible_rows,
+                prompt,
+                targets,
+                annotations,
             ),
         },
     ]
@@ -195,6 +256,111 @@ async def request_api_proposal(
     )
 
 
+def _cursor_version_key(name: str) -> tuple[int, str]:
+    match = _CURSOR_VERSION_DIR.match(name)
+    if match is None:
+        return (0, name)
+    year, month, day = (int(part) for part in match.groups())
+    return (year * 10000 + month * 100 + day, name)
+
+
+def _cursor_mode_args(mode: str) -> list[str]:
+    """Flags for one CLI run.
+
+    Ask is read-only. Agent is the CLI default (there is no ``--mode=agent``).
+    ``--print`` has no approval prompt, so Agent also passes ``--force``.
+    """
+    if mode == "ask":
+        return ["--mode=ask", "--print", "--trust", "--output-format=text"]
+    return ["--print", "--trust", "--force", "--output-format=text"]
+
+
+def _remove_workdir(path: str) -> None:
+    """Delete the CLI workspace. A just-exited process can keep the directory locked."""
+    for attempt in range(10):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == 9:
+                return
+            time.sleep(0.15)
+
+
+def parse_cursor_model_list(output: str) -> list[tuple[str, str]]:
+    models: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        model_id, separator, label = line.strip().partition(" - ")
+        if not separator or not model_id or any(character.isspace() for character in model_id):
+            continue
+        models.append((model_id, label.strip() or model_id))
+    return models
+
+
+async def list_cursor_models() -> list[tuple[str, str]]:
+    executable = shutil.which("agent") or shutil.which("cursor-agent")
+    if executable is None:
+        raise RuntimeError("未找到 Cursor Agent CLI，无法读取可用模型。")
+    process = await asyncio.create_subprocess_exec(
+        *_cursor_cli_argv(executable),
+        "--list-models",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise RuntimeError("读取 Cursor 模型列表超时。") from exc
+    if process.returncode != 0:
+        details = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            "读取 Cursor 模型列表失败"
+            + (f"：{details[:500]}" if details else "。")
+        )
+    models = parse_cursor_model_list(stdout.decode("utf-8", errors="replace"))
+    if not models:
+        raise RuntimeError("Cursor CLI 没有返回可用模型。")
+    return models
+
+
+def _cursor_model_args(model: str) -> list[str]:
+    normalized = model.strip()
+    if not normalized:
+        return []
+    if any(character.isspace() for character in normalized):
+        raise ValueError("Cursor 模型 ID 不能包含空白。例如 grok-4.7-high。")
+    return ["--model", normalized]
+
+
+def _cursor_cli_argv(executable: str) -> list[str]:
+    """Return the real CLI argv, skipping the Windows cmd wrapper.
+
+    ``agent.cmd`` forwards arguments with ``%*``. cmd.exe ends that command at
+    the first newline, so the table and the user request never reach the model.
+    """
+    path = Path(executable)
+    if os.name != "nt" or path.suffix.lower() not in {".cmd", ".bat", ".ps1"}:
+        return [executable]
+    versions_dir = path.parent / "versions"
+    if not versions_dir.is_dir():
+        return [executable]
+    candidates = [
+        item
+        for item in versions_dir.iterdir()
+        if item.is_dir()
+        and (item / "node.exe").is_file()
+        and (item / "index.js").is_file()
+    ]
+    if not candidates:
+        return [executable]
+    latest = max(candidates, key=lambda item: _cursor_version_key(item.name))
+    return [str(latest / "node.exe"), str(latest / "index.js")]
+
+
 async def request_cursor_proposal(
     history: list[dict[str, str]],
     columns: list[str],
@@ -203,6 +369,9 @@ async def request_cursor_proposal(
     visible_rows: list[tuple[int, dict[str, Any]]],
     prompt: str,
     mode: str = "ask",
+    model: str = "",
+    targets: list[str] | None = None,
+    annotations: list[str] | None = None,
 ) -> str:
     if mode not in {"ask", "agent"}:
         raise ValueError("Cursor Agent 模式只能选择 ask 或 agent。")
@@ -217,21 +386,30 @@ async def request_cursor_proposal(
         for turn in history
     )
     full_prompt = _proposal_instructions(
-        columns, data_types, source_name, visible_rows, prompt
+        columns,
+        data_types,
+        source_name,
+        visible_rows,
+        prompt,
+        targets,
+        annotations,
     )
     if transcript:
         full_prompt = f"此前对话：\n{transcript}\n\n{full_prompt}"
     if len(full_prompt) > MAX_CURSOR_PROMPT_CHARS:
         raise RuntimeError("当前页上下文或对话过长，请减少内容或重新打开 Agent。")
 
-    with tempfile.TemporaryDirectory(prefix="game-config-agent-") as working_directory:
+    env = os.environ.copy()
+    env.setdefault("CURSOR_INVOKED_AS", Path(executable).name)
+    working_directory = tempfile.mkdtemp(prefix="game-config-agent-")
+    try:
         process = await asyncio.create_subprocess_exec(
-            executable,
-            f"--mode={mode}",
-            "--print",
-            "--output-format=text",
+            *_cursor_cli_argv(executable),
+            *_cursor_mode_args(mode),
+            *_cursor_model_args(model),
             full_prompt,
             cwd=working_directory,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -241,6 +419,8 @@ async def request_cursor_proposal(
             process.kill()
             await process.wait()
             raise RuntimeError("Cursor Agent CLI 请求超时（180 秒）。") from exc
+    finally:
+        await asyncio.to_thread(_remove_workdir, working_directory)
     if process.returncode != 0:
         details = stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(
