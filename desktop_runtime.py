@@ -3,6 +3,7 @@ import asyncio
 import logging
 import shutil
 import sys
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,61 @@ async def _forward_client_stderr(stream, output=None):
         output.flush()
 
 
+def _centered_origin(window_width, window_height, work_left, work_top, work_right, work_bottom):
+    width = max(int(window_width), 0)
+    height = max(int(window_height), 0)
+    left = int(work_left) + max((int(work_right) - int(work_left) - width) // 2, 0)
+    top = int(work_top) + max((int(work_bottom) - int(work_top) - height) // 2, 0)
+    return left, top
+
+
+def _center_client_window(pid, find_window, sleep, timeout=5.0, is_visible=None):
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    if is_visible is None:
+        is_visible = user32.IsWindowVisible
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        hwnd = find_window(pid)
+        if hwnd and _place_window_at_center(user32, wintypes, hwnd) and is_visible(hwnd):
+            return
+        sleep(0.005)
+
+
+def _place_window_at_center(user32, wintypes, hwnd):
+    import ctypes
+
+    window = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(window)):
+        return False
+    width = window.right - window.left
+    height = window.bottom - window.top
+    if width <= 0 or height <= 0:
+        return False
+    work = wintypes.RECT()
+    if not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work), 0):
+        return False
+    left, top = _centered_origin(
+        width, height, work.left, work.top, work.right, work.bottom
+    )
+    if abs(window.left - left) <= 1 and abs(window.top - top) <= 1:
+        return True
+    user32.SetWindowPos(hwnd, 0, left, top, 0, 0, 0x0001 | 0x0004 | 0x0010)
+    return True
+
+
+def _start_center_client_window(pid):
+    from flet_desktop.win_taskbar import _find_top_window
+
+    threading.Thread(
+        target=_center_client_window,
+        args=(pid, _find_top_window, time.sleep),
+        daemon=True,
+    ).start()
+
+
 def _install_flet_client_stderr_filter():
     import flet_desktop
 
@@ -37,6 +93,7 @@ def _install_flet_client_stderr_filter():
             env=flet_env,
             stderr=asyncio.subprocess.PIPE,
         )
+        _start_center_client_window(process.pid)
         task = asyncio.create_task(_forward_client_stderr(process.stderr))
         _client_stderr_tasks.add(task)
         task.add_done_callback(_client_stderr_tasks.discard)

@@ -3,9 +3,10 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app import _rename_flet_cache_directory
-from desktop_runtime import _forward_client_stderr
+from desktop_runtime import _center_client_window, _centered_origin, _forward_client_stderr
 
 
 class FletDesktopCacheTests(unittest.TestCase):
@@ -102,6 +103,36 @@ class FletClientStderrTests(unittest.TestCase):
             return output.getvalue()
 
         self.assertEqual(asyncio.run(forward()), b"real client error\r\n")
+
+
+class WindowCenterTests(unittest.TestCase):
+    def test_origin_uses_the_work_area_center(self):
+        self.assertEqual(_centered_origin(800, 600, 0, 0, 1920, 1080), (560, 240))
+        self.assertEqual(_centered_origin(2000, 600, 100, 50, 2020, 1130), (100, 290))
+
+    def test_window_is_placed_before_it_becomes_visible(self):
+        placed = []
+        visible = {"value": False}
+
+        def find_window(pid):
+            self.assertEqual(pid, 42)
+            return 7
+
+        def place_window(user32, wintypes, hwnd):
+            placed.append(visible["value"])
+            visible["value"] = True
+            return True
+
+        with patch("desktop_runtime._place_window_at_center", place_window):
+            _center_client_window(
+                42,
+                find_window,
+                lambda delay: None,
+                timeout=1,
+                is_visible=lambda hwnd: visible["value"],
+            )
+
+        self.assertEqual(placed, [False])
 
 
 if __name__ == "__main__":

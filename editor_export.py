@@ -81,6 +81,9 @@ class EditorExport:
             "key_rules": self.key_rules_by_table,
             "agent": self.agent_settings,
         }
+        plugin_settings = getattr(self, "plugin_settings", None)
+        if plugin_settings:
+            settings["plugin_settings"] = plugin_settings
         settings_path = app_settings._app_settings_path()
         temporary_path = settings_path.with_suffix(".tmp")
         try:

@@ -197,23 +197,23 @@ class MobileLayoutTests(unittest.TestCase):
             ):
                 main(page)
 
-            sidebar = page.controls[0].controls[0]
-            configuration_actions = sidebar.content.controls[4]
-            add_button, delete_button = configuration_actions.controls[1:]
-            add_button.on_click(None)
+                sidebar = page.controls[0].controls[0]
+                configuration_actions = sidebar.content.controls[4]
+                add_button, delete_button = configuration_actions.controls[1:]
+                add_button.on_click(None)
 
-            create_dialog = page.dialogs[-1]
-            create_dialog.content.controls[1].value = "created_config"
-            create_dialog.actions[1].on_click(None)
+                create_dialog = page.dialogs[-1]
+                create_dialog.content.controls[1].value = "created_config"
+                create_dialog.actions[1].on_click(None)
 
-            configuration_path = config_directory / "created_config.tsv"
-            self.assertTrue(configuration_path.is_file())
-            self.assertFalse(delete_button.disabled)
+                configuration_path = config_directory / "created_config.tsv"
+                self.assertTrue(configuration_path.is_file())
+                self.assertFalse(delete_button.disabled)
 
-            delete_button.on_click(None)
-            confirmation_dialog = page.dialogs[-1]
-            confirmation_dialog.actions[1].on_click(None)
-            self.assertFalse(configuration_path.exists())
+                delete_button.on_click(None)
+                confirmation_dialog = page.dialogs[-1]
+                confirmation_dialog.actions[1].on_click(None)
+                self.assertFalse(configuration_path.exists())
 
     def test_drag_copy_paste_and_undo_row_actions(self):
         page = FakePage(width=1260)
@@ -318,47 +318,47 @@ class MobileLayoutTests(unittest.TestCase):
             ):
                 main(page)
 
-            sidebar = page.controls[0].controls[0]
-            file_list = sidebar.content.controls[6].content
-            test_table_path = configuration_directory / "test_config.tsv"
-            test_table_item = next(
-                control
-                for control in file_list.controls
-                if control.tooltip == str(test_table_path)
-            )
-            test_table_item.on_click(None)
+                sidebar = page.controls[0].controls[0]
+                file_list = sidebar.content.controls[6].content
+                test_table_path = configuration_directory / "test_config.tsv"
+                test_table_item = next(
+                    control
+                    for control in file_list.controls
+                    if control.tooltip == str(test_table_path)
+                )
+                test_table_item.on_click(None)
 
-            icon_cell = self._table_rows(page)[0].content.controls[3]
-            self.assertIsInstance(icon_cell.content, ft.Image)
-            self.assertEqual(icon_cell.content.width, 28)
-            self.assertEqual(
-                Path(icon_cell.content.src),
-                (configuration_directory / "../assets/assistant-icon.png").resolve(),
-            )
+                icon_cell = self._table_rows(page)[0].content.controls[3]
+                self.assertIsInstance(icon_cell.content, ft.Image)
+                self.assertEqual(icon_cell.content.width, 28)
+                self.assertEqual(
+                    Path(icon_cell.content.src),
+                    (configuration_directory / "../assets/assistant-icon.png").resolve(),
+                )
 
-            icon_cell.on_click(None)
-            dialog = page.dialogs[-1]
-            notification_count = len(page.dialogs) - 1
-            self.assertEqual(
-                dialog.title.controls[0].value,
-                "编辑「icon_path」",
-            )
-            self.assertEqual(
-                dialog.content.value,
-                "../assets/assistant-icon.png",
-            )
-            dialog.content.value = "unsaved-change.png"
-            close_button = dialog.title.controls[2]
-            self.assertEqual(close_button.tooltip, "关闭")
-            close_button.on_click(None)
-            self.assertEqual(len(page.dialogs), notification_count)
+                icon_cell.on_click(None)
+                dialog = page.dialogs[-1]
+                notification_count = len(page.dialogs) - 1
+                self.assertEqual(
+                    dialog.title.controls[0].value,
+                    "编辑「icon_path」",
+                )
+                self.assertEqual(
+                    dialog.content.value,
+                    "../assets/assistant-icon.png",
+                )
+                dialog.content.value = "unsaved-change.png"
+                close_button = dialog.title.controls[2]
+                self.assertEqual(close_button.tooltip, "关闭")
+                close_button.on_click(None)
+                self.assertEqual(len(page.dialogs), notification_count)
 
-            icon_cell.on_click(None)
-            self.assertEqual(
-                page.dialogs[-1].content.value,
-                "../assets/assistant-icon.png",
-            )
-            page.dialogs[-1].title.controls[2].on_click(None)
+                icon_cell.on_click(None)
+                self.assertEqual(
+                    page.dialogs[-1].content.value,
+                    "../assets/assistant-icon.png",
+                )
+                page.dialogs[-1].title.controls[2].on_click(None)
 
     def test_missing_saved_directory_uses_default_without_notice(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

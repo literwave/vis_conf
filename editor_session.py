@@ -1,6 +1,8 @@
 from pathlib import Path
+import inspect
 import flet as ft
 import app_settings
+from plugin_host import install_plugin, list_plugin_packages, load_plugins, uninstall_plugin
 import config_directory
 from agent_ui import create_agent_dialogs, load_agent_settings
 from schema import (
@@ -46,8 +48,7 @@ class Workspace(
         )
         self.mobile_platform = self.page.platform.is_mobile()
         if not self.mobile_platform:
-            self.page.window.min_width = 960
-            self.page.window.min_height = 680
+            prepare_desktop_window(self.page)
         self.columns = SAMPLE_COLUMNS.copy()
         self.data_types = SAMPLE_TYPES.copy()
         self.targets = SAMPLE_TARGETS.copy()
@@ -82,6 +83,12 @@ class Workspace(
             discovered = config_directory.resolve_current_configuration_directory()
             if config_directory.directory_contains_tsv(discovered):
                 self.configuration_directory = str(discovered)
+        saved_plugin_settings = saved_settings.get("plugin_settings")
+        self.plugin_settings = (
+            saved_plugin_settings if isinstance(saved_plugin_settings, dict) else {}
+        )
+        self.plugin_errors: list[str] = []
+        self.plugin_actions: list = []
         saved_backend_format = saved_settings.get("backend_format")
         saved_frontend_format = saved_settings.get("frontend_format")
         backend_format = (
@@ -468,6 +475,13 @@ class Workspace(
                     visible=not self.mobile_platform,
                 ),
                 ft.OutlinedButton(
+                    "插件",
+                    icon=ft.Icons.EXTENSION_OUTLINED,
+                    on_click=self.open_plugin_manager,
+                    visible=not self.mobile_platform,
+                    tooltip="安装或卸载插件",
+                ),
+                ft.OutlinedButton(
                     "导出设置",
                     icon=ft.Icons.SETTINGS_OUTLINED,
                     on_click=self.open_export_settings,
@@ -485,6 +499,7 @@ class Workspace(
             wrap=True,
             run_spacing=8,
         )
+        self.refresh_plugin_actions()
         self.header_title = ft.Column(
             [
                 ft.Text(
@@ -719,8 +734,236 @@ class Workspace(
             self.refresh_configuration_files()
         if settings_load_error:
             startup_errors.append(settings_load_error)
+        startup_errors.extend(
+            f"插件加载失败：{message}" for message in self.plugin_errors
+        )
         if startup_errors:
             self.notify("；".join(startup_errors), error=True)
+
+    def refresh_plugin_actions(self, update: bool = False):
+        try:
+            actions, errors = load_plugins(_PluginHost(self))
+        except Exception as exc:
+            actions, errors = [], [str(exc)]
+        self.plugin_actions = actions
+        self.plugin_errors = errors
+        if update:
+            self.page.update()
+
+    def open_plugin_manager(self, _):
+        try:
+            packages = list_plugin_packages()
+        except OSError as exc:
+            self.notify(f"读取插件失败：{exc}", error=True)
+            return
+        if packages:
+            rows = [self.plugin_package_row(package) for package in packages]
+        else:
+            rows = [ft.Text("没有可安装的插件。", size=12, color="#667085")]
+        self.show_alert_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("插件"),
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "安装后点「打开」使用。插件都从这里进入，不占顶栏。",
+                            size=12,
+                            color="#667085",
+                        ),
+                        *rows,
+                    ],
+                    spacing=12,
+                    width=self.dialog_width(520),
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                actions=[
+                    ft.TextButton("完成", on_click=lambda _: self.page.pop_dialog())
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def plugin_package_row(self, package):
+        def install(_):
+            updating = package.installed
+            try:
+                install_plugin(package.plugin_id)
+            except (OSError, FileNotFoundError) as exc:
+                self.notify(f"安装失败：{exc}", error=True)
+                return
+            self.refresh_plugin_actions(update=True)
+            self.page.pop_dialog()
+            self.open_plugin_manager(None)
+            verb = "更新" if updating else "安装"
+            self.notify(f"已{verb}「{package.title}」")
+
+        def uninstall(_):
+            try:
+                uninstall_plugin(package.plugin_id)
+            except OSError as exc:
+                self.notify(f"卸载失败：{exc}", error=True)
+                return
+            self.refresh_plugin_actions(update=True)
+            self.page.pop_dialog()
+            self.open_plugin_manager(None)
+            self.notify(f"已卸载「{package.title}」")
+
+        async def open_plugin(_):
+            action = next(
+                (
+                    item
+                    for item in self.plugin_actions
+                    if item.plugin_id == package.plugin_id
+                ),
+                None,
+            )
+            if action is None:
+                self.notify(f"请先安装「{package.title}」。", error=True)
+                return
+            self.page.pop_dialog()
+            try:
+                result = action.on_click(_)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:
+                self.notify(f"打开「{package.title}」失败：{exc}", error=True)
+
+        actions = []
+        if package.installed and not package.outdated:
+            actions.append(ft.Button("打开", on_click=open_plugin))
+        if package.outdated:
+            actions.append(ft.Button("更新", on_click=install))
+        actions.append(
+            ft.OutlinedButton("卸载", on_click=uninstall)
+            if package.installed
+            else ft.Button("安装", on_click=install)
+        )
+        status = "有新版本" if package.outdated else "已安装" if package.installed else "未安装"
+        status_color = "#B54708" if package.outdated else "#027A48" if package.installed else "#98A2B3"
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Column(
+                        [
+                            ft.Text(package.title, size=14, weight=ft.FontWeight.W_600),
+                            ft.Text(package.description, size=12, color="#667085"),
+                            ft.Text(status, size=11, color=status_color),
+                        ],
+                        spacing=4,
+                        expand=True,
+                    ),
+                    ft.Row(actions, spacing=8),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            border=ft.Border.all(1, "#EAECF0"),
+            border_radius=12,
+            padding=12,
+        )
+
+class _PluginHost:
+    def __init__(self, workspace: Workspace):
+        self.workspace = workspace
+
+    def notify(self, message: str, error: bool = False) -> None:
+        self.workspace.notify(message, error)
+
+    def show_dialog(self, dialog, on_close=None) -> None:
+        self.workspace.show_alert_dialog(dialog, on_close=on_close)
+
+    def listen_keyboard(self, handler) -> None:
+        self.workspace.plugin_keyboard_handler = handler
+
+    def stop_keyboard(self) -> None:
+        self.workspace.plugin_keyboard_handler = None
+
+    def focus(self, control) -> None:
+        focus = getattr(control, "focus", None)
+        if focus is None:
+            return
+        result = focus()
+        run_task = getattr(self.workspace.page, "run_task", None)
+        if result is not None and run_task is not None:
+            async def runner():
+                await result
+
+            run_task(runner)
+
+    def pop_dialog(self) -> None:
+        self.workspace.page.pop_dialog()
+
+    def update(self) -> None:
+        self.workspace.page.update()
+
+    def dialog_width(self, preferred: int) -> int:
+        return self.workspace.dialog_width(preferred)
+
+    def dialog_height(self, preferred: int, margin: int = 80) -> int:
+        return self.workspace.dialog_height(preferred, margin)
+
+    def show_text(self, title: str, text: str) -> None:
+        self.workspace.show_alert_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(title),
+                content=ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                text,
+                                selectable=True,
+                                size=12,
+                                color="#344054",
+                            )
+                        ],
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    width=self.workspace.dialog_width(720),
+                    height=self.workspace.dialog_height(420),
+                ),
+            )
+        )
+
+    async def pick_directory(self, title: str, initial: str | None = None) -> str | None:
+        try:
+            return await self.workspace.picker.get_directory_path(
+                dialog_title=title,
+                initial_directory=self.workspace.available_initial_directory(initial),
+            )
+        except (OSError, RuntimeError) as exc:
+            self.workspace.notify(f"选择目录失败：{exc}", error=True)
+            return None
+
+    def configuration_directory(self) -> str | None:
+        return self.workspace.configuration_directory
+
+    def get_setting(self, plugin_id: str, key: str, default=None):
+        bucket = self.workspace.plugin_settings.get(plugin_id)
+        if not isinstance(bucket, dict):
+            return default
+        return bucket.get(key, default)
+
+    def set_setting(self, plugin_id: str, key: str, value) -> None:
+        bucket = self.workspace.plugin_settings.get(plugin_id)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            self.workspace.plugin_settings[plugin_id] = bucket
+        bucket[key] = value
+        self.workspace.save_export_settings()
+
+    @property
+    def app_directory(self) -> Path:
+        return Path(__file__).resolve().parent
+
+
+def prepare_desktop_window(page):
+    platform = getattr(page, "platform", None)
+    if platform is not None and platform.is_mobile():
+        return
+    page.window.min_width = 960
+    page.window.min_height = 680
 
 
 def main(page):

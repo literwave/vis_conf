@@ -119,6 +119,9 @@ class EditorRows:
         self.notify(f"已插入到第 {self.selected_row_index + 1} 行，原行下移")
 
     def handle_row_shortcuts(self, event: ft.KeyboardEvent):
+        handler = getattr(self, "plugin_keyboard_handler", None)
+        if callable(handler) and handler(event):
+            return
         key = event.key.casefold()
         if not (event.ctrl or event.meta) or event.alt or event.shift:
             return

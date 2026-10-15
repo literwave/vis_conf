@@ -5,7 +5,7 @@ import flet as ft
 from app_settings import _app_settings_path, _load_app_settings
 from config_directory import resolve_current_configuration_directory
 from desktop_runtime import _prepare_flet_desktop_runtime, _rename_flet_cache_directory
-from editor_session import main
+from editor_session import main, prepare_desktop_window
 from export_data import (
     build_export_archive,
     export_json_data,
@@ -40,4 +40,4 @@ __all__ = [
 if __name__ == "__main__":
     if os.name == "nt":
         _prepare_flet_desktop_runtime()
-    ft.run(main, view=ft.AppView.FLET_APP)
+    ft.run(main, before_main=prepare_desktop_window, view=ft.AppView.FLET_APP)

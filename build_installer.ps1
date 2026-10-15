@@ -24,6 +24,7 @@ try {
         --product-version $Version `
         --file-version "$Version.0" `
         --icon "assets\assistant-icon.ico" `
+        --add-data "plugin_catalog;plugin_catalog" `
         --distpath "dist\package" `
         --yes
     if ($LASTEXITCODE -ne 0) {
