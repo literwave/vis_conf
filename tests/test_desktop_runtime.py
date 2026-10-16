@@ -95,6 +95,7 @@ class FletClientStderrTests(unittest.TestCase):
             stream = asyncio.StreamReader()
             stream.feed_data(
                 b"libpng warning: iCCP: known incorrect sRGB profile\r\n"
+                b"[ERROR:flutter/shell/platform/common/accessibility_bridge.cc(114)] Failed to update ui::AXTree, error: 195 will not be in the tree and is not the new root\r\n"
                 b"real client error\r\n"
             )
             stream.feed_eof()

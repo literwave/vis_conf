@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from plugin_catalog.protocol_export import (
     field_type_options,
     file_matches,
     find_protocol_tools,
+    message_kind,
     message_name_error,
     parse_proto,
     render_proto,
@@ -23,6 +25,7 @@ from plugin_catalog.protocol_export import (
     resolve_import_directory,
     resolve_pb_directory,
     run_protocol_export,
+    type_matches,
     validate_document,
 )
 from plugin_host import install_plugin, list_plugin_packages, load_plugins, uninstall_plugin
@@ -217,6 +220,10 @@ class ProtocolPluginTests(unittest.TestCase):
             )
         with tempfile.TemporaryDirectory() as other_directory:
             self.assertIsNone(find_protocol_tools([other_directory]))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            tools = _tools_tree(Path(temporary_directory))
+            shutil.rmtree(tools / "proto")
+            self.assertTrue(os.path.samefile(find_protocol_tools([tools]), tools))
 
     def test_export_runs_existing_scripts_from_the_tools_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -392,11 +399,13 @@ class ProtocolPluginTests(unittest.TestCase):
             editor.message_query = "create"
             editor._fill_message_list()
             names = [
-                control.content.value
+                control.content.controls[1].value
                 for control in editor.message_list.controls
-                if getattr(getattr(control, "content", None), "value", None)
+                if isinstance(getattr(control, "content", None), ft.Row)
             ]
             self.assertEqual(names, ["c2s_create_build"])
+            tag = editor.message_list.controls[0].content.controls[0].content.value
+            self.assertEqual(tag, "请求")
             editor.message_query = ""
             editor.message_search_focused = True
             editor._on_key(
@@ -411,6 +420,157 @@ class ProtocolPluginTests(unittest.TestCase):
             self.assertEqual(editor.file_search.hint_text, "搜索文件，回车打开")
             self.assertTrue(editor.file_search.ignore_up_down_keys)
             self.assertEqual(editor.file_search.on_submit, editor._open_search_target)
+
+    def test_type_matches_ranks_prefix_then_substring_then_letters(self):
+        options = ["int32", "string", "Common.p_item", "p_build_info", "bytes"]
+        self.assertEqual(type_matches(options, "p_"), ["Common.p_item", "p_build_info"])
+        self.assertEqual(type_matches(options, "item"), ["Common.p_item"])
+        self.assertEqual(type_matches(options, "pbi"), ["p_build_info"])
+        self.assertEqual(type_matches(options, "string")[0], "string")
+        self.assertEqual(len(type_matches(options, "string")), len(options))
+        self.assertEqual(type_matches(options, "zzz"), [])
+
+    def test_field_row_toggles_kind_and_completes_types(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            tools = _tools_tree(root)
+            source = root / "proto"
+            source.mkdir()
+            (source / "build.proto").write_text(
+                'syntax = "proto3";\n\npackage Build;\n\n'
+                "message p_build_info {\n\tint32 id = 1;\n}\n"
+                "message c2s_create_build {\n\tint32 bid = 1;\n}\n",
+                encoding="utf-8",
+            )
+
+            class FakeContext:
+                def dialog_width(self, preferred):
+                    return preferred
+
+                def dialog_height(self, preferred, margin=80):
+                    return preferred
+
+                def update(self):
+                    pass
+
+            editor = ProtocolEditor(FakeContext(), tools, source)
+            editor.rebuild()
+            document = editor._document()
+            message = document.messages[1]
+            item = message.fields[0]
+            row = editor._field_row(document, message, item)
+            kind_box = row.controls[0].content
+            type_box = row.controls[1].content
+            self.assertIsInstance(kind_box, ft.TextField)
+            self.assertEqual(kind_box.value, "单个")
+            self.assertEqual(kind_box.width, 72)
+
+            def choose(control, value):
+                control.on_click(None)
+                chips = {
+                    chip.content.value: chip for chip in editor.suggestions.controls
+                }
+                self.assertEqual(list(chips), ["单个", "数组", "字典"])
+                chips[value].on_click(None)
+
+            type_box.on_focus(SimpleNamespace(control=type_box))
+            type_box.value = "pbi"
+            type_box.on_change(SimpleNamespace(control=type_box))
+            chips = [chip.content.value for chip in editor.suggestions.controls]
+            self.assertEqual(chips, ["p_build_info"])
+            type_box.on_submit(SimpleNamespace(control=type_box))
+            self.assertEqual(item.type_name, "p_build_info")
+            self.assertEqual(type_box.value, "p_build_info")
+
+            type_box.value = "Other.p_custom"
+            type_box.on_change(SimpleNamespace(control=type_box))
+            type_box.on_submit(SimpleNamespace(control=type_box))
+            self.assertEqual(item.type_name, "Other.p_custom")
+
+            choose(kind_box, "数组")
+            self.assertTrue(item.repeated)
+            row = editor._field_row(document, message, item)
+            choose(row.controls[0].content, "字典")
+            self.assertEqual(item.map_key, "int32")
+            row = editor._field_row(document, message, item)
+            key_box, value_box, value_kind = row.controls[1].controls
+            self.assertEqual(key_box.hint_text, "键")
+            self.assertEqual(value_box.hint_text, "值")
+            value_box.on_focus(SimpleNamespace(control=value_box))
+            value_box.value = "pbi"
+            value_box.on_change(SimpleNamespace(control=value_box))
+            chips = [chip.content.value for chip in editor.suggestions.controls]
+            self.assertEqual(chips, ["p_build_info"])
+            value_box.on_submit(SimpleNamespace(control=value_box))
+            self.assertEqual(item.map_value, "p_build_info")
+            key_box.on_focus(SimpleNamespace(control=key_box))
+            key_box.value = "str"
+            key_box.on_change(SimpleNamespace(control=key_box))
+            chips = [chip.content.value for chip in editor.suggestions.controls]
+            self.assertEqual(chips, ["string"])
+            self.assertEqual(value_kind.value, "单个")
+            value_kind.on_click(None)
+            self.assertEqual(value_kind.value, "数组")
+            self.assertTrue(item.map_value_repeated)
+            self.assertTrue(document.dirty)
+
+    def test_ctrl_s_saves_and_source_mode_round_trips(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            tools = _tools_tree(root)
+            source = root / "proto"
+            source.mkdir()
+            path = source / "build.proto"
+            path.write_text(
+                'syntax = "proto3";\n\npackage Build;\n\n'
+                "message c2s_create_build {\n\tint32 bid = 1;\n}\n",
+                encoding="utf-8",
+            )
+
+            class FakeContext:
+                def dialog_width(self, preferred):
+                    return preferred
+
+                def dialog_height(self, preferred, margin=80):
+                    return preferred
+
+                def update(self):
+                    pass
+
+                def notify(self, message, error=False):
+                    pass
+
+            editor = ProtocolEditor(FakeContext(), tools, source)
+            editor.rebuild()
+            editor.documents[path].messages[0].fields[0].name = "build_id"
+            editor.documents[path].dirty = True
+            handled = editor._on_key(
+                SimpleNamespace(key="S", shift=False, ctrl=True, alt=False, meta=False)
+            )
+            self.assertTrue(handled)
+            self.assertIn("int32 build_id = 1;", path.read_text(encoding="utf-8"))
+            self.assertFalse(editor._is_dirty(path))
+
+            editor.toggle_source()
+            self.assertTrue(editor.source_mode)
+            editor.source_text[path] = path.read_text(encoding="utf-8").replace(
+                "build_id = 1;", "build_id = 1;\n\tstring name = 2;"
+            )
+            self.assertTrue(editor._is_dirty(path))
+            editor._on_key(
+                SimpleNamespace(key="s", shift=False, ctrl=True, alt=False, meta=False)
+            )
+            self.assertIn("string name = 2;", path.read_text(encoding="utf-8"))
+            self.assertEqual(len(editor.documents[path].messages[0].fields), 2)
+            self.assertFalse(editor._is_dirty(path))
+
+            editor.source_text[path] = "message broken {"
+            editor.toggle_source()
+            self.assertTrue(editor.source_mode)
+            self.assertIn("源码还不能用表格编辑", editor.status.value)
+            editor.source_text[path] = path.read_text(encoding="utf-8")
+            editor.toggle_source()
+            self.assertFalse(editor.source_mode)
 
     def test_enter_opens_matching_protocol_and_arrows_move_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -568,16 +728,104 @@ class ProtoDocumentTests(unittest.TestCase):
             document = parse_proto(path.read_text(encoding="utf-8-sig"))
             again = parse_proto(render_proto(document))
             self.assertEqual(
-                [(item.name, item.comment, [(field.name, field.number, field.comment, field.repeated, field.type_name) for field in item.fields]) for item in document.messages],
-                [(item.name, item.comment, [(field.name, field.number, field.comment, field.repeated, field.type_name) for field in item.fields]) for item in again.messages],
+                [(item.name, item.comment, [(field.name, field.number, field.comment, field.repeated, field.type_name, field.map_key, field.map_value) for field in item.fields]) for item in document.messages],
+                [(item.name, item.comment, [(field.name, field.number, field.comment, field.repeated, field.type_name, field.map_key, field.map_value) for field in item.fields]) for item in again.messages],
             )
-            self.assertEqual(validate_document(path.name, document), [])
+            self.assertEqual(validate_document(path.name, document, proto_dir), [])
 
     def test_common_types_cannot_use_protocol_prefix(self):
         self.assertIsNotNone(message_name_error("common.proto", "c2s_reward"))
         self.assertIsNone(message_name_error("common.proto", "p_reward_info"))
-        self.assertIsNotNone(message_name_error("login.proto", "p_reward_info"))
+        self.assertIsNone(message_name_error("login.proto", "p_reward_info"))
+        self.assertIsNone(message_name_error("caravan.proto", "notify_caravan_play"))
         self.assertIsNone(message_name_error("chat.proto", "c2sChat"))
+        self.assertIsNotNone(message_name_error("chat.proto", "1bad"))
+
+    def test_mixed_protocol_file_saves_with_aligned_comments(self):
+        document = parse_proto(
+            'syntax = "proto3";\n\npackage caravan;\n\n'
+            "message CaravanSimpleRecordItem {\n    uint64 damage = 1;\n}\n\n"
+            "message notify_caravan_state{\n"
+            "\tmap<uint64, uint32> caravan_state_map = 1; // 商队状态\n"
+            "\tuint32 n = 2;\t//数量\n}\n\n"
+            "//请求必争之城数量\nmessage c2s_get_caravan_keycity{\n}\n"
+        )
+        self.assertEqual(validate_document("caravan.proto", document), [])
+        self.assertEqual(
+            [message_kind(item.name) for item in document.messages],
+            ["type", "notify", "c2s"],
+        )
+        rendered = render_proto(document)
+        self.assertIn(
+            "\tmap<uint64, uint32> caravan_state_map = 1;  // 商队状态\n"
+            f"\t{'uint32 n = 2;'.ljust(len('map<uint64, uint32> caravan_state_map = 1;'))}  // 数量\n",
+            rendered,
+        )
+        self.assertIn("// 请求必争之城数量\nmessage c2s_get_caravan_keycity {\n}", rendered)
+        self.assertEqual(render_proto(parse_proto(rendered)), rendered)
+
+    def test_unknown_field_type_is_rejected(self):
+        missing = parse_proto(
+            'syntax = "proto3";\n\npackage caravan;\n\n'
+            "message c2s_load {\n\tNoSuch info = 1;\n"
+            "\tmap<uint32, AlsoMissing> gifts = 2;\n}\n"
+        )
+        errors = validate_document("caravan.proto", missing)
+        self.assertIn("c2s_load.info：不支持的类型 NoSuch", errors)
+        self.assertIn("c2s_load.gifts：不支持的类型 AlsoMissing", errors)
+        present = parse_proto(
+            'syntax = "proto3";\n\npackage caravan;\n\n'
+            "message CaravanPlayInfo {\n\tuint32 id = 1;\n}\n"
+            "message c2s_load {\n\tCaravanPlayInfo info = 1;\n}\n"
+        )
+        self.assertEqual(validate_document("caravan.proto", present), [])
+
+    def test_map_and_repeated_fields_round_trip(self):
+        document = parse_proto(
+            "\n".join(
+                [
+                    'syntax = "proto3";',
+                    "package User;",
+                    "message c2s_user_res {",
+                    "    map<int32, string> res = 1; // 资源",
+                    "    repeated int32 ids = 2;",
+                    "}",
+                    "",
+                ]
+            )
+        )
+        rendered = render_proto(document)
+        again = parse_proto(rendered)
+        original = document.messages[0].fields
+        copied = again.messages[0].fields
+        self.assertEqual(
+            [(item.map_key, item.map_value, item.repeated, item.type_name, item.name, item.number, item.comment) for item in original],
+            [("int32", "string", False, "", "res", 1, "资源"), ("", "", True, "int32", "ids", 2, "")],
+        )
+        self.assertEqual(
+            [(item.map_key, item.map_value, item.repeated, item.type_name, item.name) for item in copied],
+            [(item.map_key, item.map_value, item.repeated, item.type_name, item.name) for item in original],
+        )
+        self.assertEqual(validate_document("user.proto", document), [])
+        self.assertIn("map<int32, string> res = 1;  // 资源", rendered)
+        self.assertIn("repeated int32 ids = 2;", rendered)
+
+        document.messages[0].fields[0].map_value_repeated = True
+        rendered = render_proto(document)
+        again = parse_proto(rendered)
+        mapped = again.messages[0].fields[0]
+        self.assertEqual(mapped.map_key, "int32")
+        self.assertEqual(mapped.map_value, "string")
+        self.assertTrue(mapped.map_value_repeated)
+        self.assertEqual([item.name for item in again.messages], ["c2s_user_res"])
+        self.assertIn("map<int32, p_map_c2s_user_res_res_list> res = 1;  // 资源", rendered)
+        self.assertIn("message p_map_c2s_user_res_res_list {", rendered)
+        self.assertIn("repeated string value = 1;", rendered)
+        self.assertEqual(validate_document("user.proto", again), [])
+
+        document.messages[0].fields[0].map_key = "float"
+        errors = validate_document("user.proto", document)
+        self.assertTrue(any("字典的键" in error for error in errors))
 
     def test_field_type_options_include_scalars_and_imported_messages(self):
         proto_dir = Path(__file__).resolve().parents[2] / "proto"

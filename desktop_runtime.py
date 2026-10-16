@@ -8,7 +8,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
-_IGNORED_CLIENT_STDERR = (b"libpng warning: iCCP: known incorrect sRGB profile",)
+_IGNORED_CLIENT_STDERR = (
+    b"libpng warning: iCCP: known incorrect sRGB profile",
+    b"Failed to update ui::AXTree",
+)
 _client_stderr_tasks = set()
 
 
