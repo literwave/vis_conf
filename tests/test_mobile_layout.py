@@ -200,7 +200,7 @@ class MobileLayoutTests(unittest.TestCase):
         configuration_actions = sidebar.content.controls[4]
         self.assertEqual(
             [control.tooltip for control in configuration_actions.controls[1:]],
-            ["新建配置表", "删除当前配置表"],
+            ["刷新配置表", "新建配置表", "删除当前配置表"],
         )
 
         page.width = 1024
@@ -243,7 +243,7 @@ class MobileLayoutTests(unittest.TestCase):
 
                 sidebar = page.controls[0].controls[0]
                 configuration_actions = sidebar.content.controls[4]
-                add_button, delete_button = configuration_actions.controls[1:]
+                _, add_button, delete_button = configuration_actions.controls[1:]
                 add_button.on_click(None)
 
                 create_dialog = page.dialogs[-1]
@@ -404,6 +404,20 @@ class MobileLayoutTests(unittest.TestCase):
                 )
                 page.dialogs[-1].title.controls[2].on_click(None)
 
+    def test_invalid_cell_save_shows_the_reason_under_the_field(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
+            main(page)
+            price_cell = self._table_rows(page)[0].content.controls[5]
+            price_cell.on_click(None)
+            dialog = page.dialogs[-1]
+            dialog.content.value = "{ none = 0, windows = 1 }"
+            dialog.actions[1].on_click(None)
+
+        self.assertIs(page.dialogs[-1], dialog)
+        self.assertIn("请输入整数", dialog.content.error)
+
     def test_missing_saved_directory_uses_default_without_notice(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -490,6 +504,74 @@ class MobileLayoutTests(unittest.TestCase):
                 picker.calls[0]["initial_directory"],
                 str(current_directory),
             )
+
+    def test_export_settings_save_names_a_missing_directory(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
+            main(page)
+            header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
+            next(
+                control
+                for control in header_actions.controls
+                if getattr(control, "content", None) == "导出设置"
+            ).on_click(None)
+            dialog = page.dialogs[-1]
+            backend = next(
+                control
+                for control in dialog.content.controls
+                if isinstance(control, ft.Row)
+                for field in control.controls
+                if isinstance(field, ft.TextField) and field.label == "后端导出目录"
+            )
+            # The comprehension above returns the Row. Find the field inside it.
+            backend_field = next(
+                field
+                for field in backend.controls
+                if isinstance(field, ft.TextField)
+            )
+            backend_field.value = "D:/missing-backend"
+            next(
+                action for action in dialog.actions if getattr(action, "content", None) == "保存"
+            ).on_click(None)
+
+        self.assertEqual(dialog.content.controls[-1].value, "后端导出目录不存在：D:/missing-backend")
+        self.assertEqual(page.dialogs[-1].content.value, "后端导出目录不存在：D:/missing-backend")
+
+    def test_sidebar_refresh_shows_tsv_added_on_disk(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_directory = Path(temporary_directory) / "configs"
+            config_directory.mkdir()
+            (config_directory / "hero.tsv").write_text("id\ninteger\nboth\n编号\n", encoding="utf-8")
+            page = FakePage(width=1260)
+            page.platform = ft.PagePlatform.WINDOWS
+            with (
+                patch(
+                    "app_settings._load_app_settings",
+                    return_value=({"configuration_directory": str(config_directory)}, None),
+                ),
+                patch(
+                    "app_settings._app_settings_path",
+                    return_value=Path(temporary_directory) / "settings.json",
+                ),
+            ):
+                main(page)
+                (config_directory / "item.tsv").write_text("id\ninteger\nboth\n编号\n", encoding="utf-8")
+                sidebar = page.controls[0].controls[0]
+                refresh = next(
+                    control
+                    for control in sidebar.content.controls[4].controls
+                    if getattr(control, "tooltip", None) == "刷新配置表"
+                )
+                refresh.on_click(None)
+                file_list = sidebar.content.controls[6].content
+                names = [
+                    control.content.controls[1].value
+                    for control in file_list.controls
+                    if isinstance(control, ft.Container)
+                ]
+
+        self.assertEqual(names, ["hero.tsv", "item.tsv"])
 
     def test_resolve_current_directory_prefers_nearby_tsv_folder(self):
         from app import resolve_current_configuration_directory

@@ -140,7 +140,7 @@ class Workspace(
         self.configuration_directory_field = ft.TextField(
             label="配置文件目录",
             value=self.configuration_directory or "尚未选择",
-            read_only=True,
+            hint_text="选择目录，或直接粘贴路径",
             width=410,
         )
         self.configuration_table_count = ft.Text(
@@ -203,13 +203,13 @@ class Workspace(
         self.backend_directory_field = ft.TextField(
             label="后端导出目录",
             value=self.export_paths["backend"] or "尚未选择",
-            read_only=True,
+            hint_text="选择目录，或直接粘贴路径",
             width=410,
         )
         self.frontend_directory_field = ft.TextField(
             label="前端导出目录",
             value=self.export_paths["frontend"] or "尚未选择",
-            read_only=True,
+            hint_text="选择目录，或直接粘贴路径",
             width=410,
         )
         self.backend_format_select = ft.Dropdown(
@@ -363,6 +363,12 @@ class Workspace(
                     ft.Row(
                         [
                             configuration_section_title,
+                            ft.IconButton(
+                                icon=ft.Icons.REFRESH,
+                                icon_size=18,
+                                tooltip="刷新配置表",
+                                on_click=self.reload_configuration_files,
+                            ),
                             ft.IconButton(
                                 icon=ft.Icons.ADD,
                                 icon_size=18,

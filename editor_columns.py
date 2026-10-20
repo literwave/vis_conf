@@ -4,6 +4,18 @@ from schema import DATA_TYPES, EXPORT_TARGETS
 from table_file import parse_data_value
 
 
+def _set_field_error(field: ft.TextField | ft.Dropdown, message: str | None) -> None:
+    if isinstance(field, ft.TextField):
+        field.error = message
+        field.error_max_lines = 3
+    else:
+        field.error_text = message
+
+
+def _clear_field_error(field: ft.TextField | ft.Dropdown) -> None:
+    _set_field_error(field, None)
+
+
 class EditorColumns:
     def open_column_manager(self, _):
         pending_column: str | None = None
@@ -258,7 +270,7 @@ class EditorColumns:
         self, error_text: ft.Text, field: ft.TextField | ft.Dropdown | None = None
     ):
         if field is not None:
-            field.error_text = None
+            _clear_field_error(field)
         error_text.value = ""
         error_text.visible = False
 
@@ -272,12 +284,12 @@ class EditorColumns:
         form_error: ft.Text,
     ):
         for field in (name_input, type_input, target_input, default_input):
-            field.error_text = None
+            _clear_field_error(field)
         self.clear_column_form_error(form_error)
 
         def show_error(message: str, field: ft.TextField | ft.Dropdown | None = None):
             if field is not None:
-                field.error_text = message
+                _set_field_error(field, message)
             form_error.value = message
             form_error.visible = True
             self.page.update()

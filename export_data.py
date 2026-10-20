@@ -244,6 +244,45 @@ def prepare_export_files(
     return outputs
 
 
+def checked_export_directory(label: str, raw: str | None) -> str | None:
+    text = (raw or "").strip().strip('"')
+    if text in {"", "尚未选择"}:
+        return None
+    path = Path(text)
+    if not path.exists():
+        raise ValueError(f"{label}不存在：{text}")
+    if not path.is_dir():
+        raise ValueError(f"{label}不是文件夹：{text}")
+    return str(path)
+
+
+def remove_stale_export_files(
+    directory: str | None, extension: str, kept_paths: set[str]
+) -> list[Path]:
+    if not directory or extension not in {"lua", "json"}:
+        return []
+    root = Path(directory)
+    if not root.is_dir():
+        return []
+    suffix = f".{extension}"
+    removed: list[Path] = []
+    for path in root.iterdir():
+        if not path.is_file() or path.suffix.lower() != suffix:
+            continue
+        try:
+            key = os.path.normcase(str(path.resolve()))
+        except OSError as exc:
+            raise ValueError(f"无法检查导出文件 {path.name}：{exc}") from exc
+        if key in kept_paths:
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise ValueError(f"无法删除已没有对应配置表的文件 {path.name}：{exc}") from exc
+        removed.append(path)
+    return removed
+
+
 def write_export_files(
     columns: list[str],
     data_types: list[str],

@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 import zipfile
@@ -15,6 +16,8 @@ from app import (
     new_configuration_table_bytes,
     prepare_export_files,
 )
+from export_data import checked_export_directory, remove_stale_export_files
+from table_file import parse_data_value
 
 
 class BuildExportArchiveTests(unittest.TestCase):
@@ -174,6 +177,50 @@ class BuildExportArchiveTests(unittest.TestCase):
                     key_columns=["id"],
                     validate_directories=False,
                 )
+
+
+    def test_lua_array_rejects_a_dictionary_with_a_specific_reason(self):
+        with self.assertRaisesRegex(ValueError, "当前类型是 Lua 表数组"):
+            parse_data_value("{ none = 0, windows = 1 }", "lua_array")
+
+    def test_missing_export_directory_names_the_path(self):
+        missing = "D:/missing-export"
+        with self.assertRaisesRegex(ValueError, f"后端导出目录不存在：{missing}"):
+            checked_export_directory("后端导出目录", missing)
+        self.assertIsNone(checked_export_directory("后端导出目录", "尚未选择"))
+
+    def test_full_export_removes_files_without_a_configuration_table(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            backend = root / "backend"
+            frontend = root / "frontend"
+            backend.mkdir()
+            frontend.mkdir()
+            kept = backend / "hero.lua"
+            stale = backend / "old_item.lua"
+            kept.write_text("return {}", encoding="utf-8")
+            stale.write_text("return {}", encoding="utf-8")
+            (frontend / "old_item.json").write_text("{}", encoding="utf-8")
+            (frontend / "hero.json").write_text("{}", encoding="utf-8")
+            (backend / "notes.txt").write_text("keep", encoding="utf-8")
+
+            removed = remove_stale_export_files(
+                str(backend), "lua", {os.path.normcase(str(kept.resolve()))}
+            )
+            removed.extend(
+                remove_stale_export_files(
+                    str(frontend),
+                    "json",
+                    {os.path.normcase(str((frontend / "hero.json").resolve()))},
+                )
+            )
+
+            self.assertEqual({path.name for path in removed}, {"old_item.lua", "old_item.json"})
+            self.assertTrue(kept.is_file())
+            self.assertTrue((frontend / "hero.json").is_file())
+            self.assertTrue((backend / "notes.txt").is_file())
+            self.assertFalse(stale.exists())
+            self.assertFalse((frontend / "old_item.json").exists())
 
 
 if __name__ == "__main__":

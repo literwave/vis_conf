@@ -274,7 +274,10 @@ def _parse_lua_table(value: str, data_type: str) -> list[Any] | dict[Any, Any]:
     if data_type == "lua_array":
         if isinstance(parsed, dict):
             if not all((type(key) is int for key in parsed)):
-                raise ValueError("Lua 表数组只能包含顺序数组项。")
+                raise ValueError(
+                    "当前类型是 Lua 表数组，不能写 name = value 这种字典。"
+                    "数组示例：{1, 2}。要保存字典，请把这一列的类型改成 Lua 表字典。"
+                )
             if set(parsed) != set(range(1, len(parsed) + 1)):
                 raise ValueError("Lua 表数组的索引必须从 1 开始连续排列。")
             return [parsed[index] for index in range(1, len(parsed) + 1)]

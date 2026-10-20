@@ -51,7 +51,9 @@ class EditorDialogs:
             ft.SnackBar(
                 content=ft.Text(message, color="#FFFFFF"),
                 bgcolor="#D92D20" if error else "#344054",
-                duration=3000,
+                duration=8000 if error else 3000,
+                behavior=ft.SnackBarBehavior.FLOATING,
+                show_close_icon=error,
             )
         )
 

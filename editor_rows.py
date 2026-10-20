@@ -11,6 +11,23 @@ from table_file import (
 )
 
 
+def _cell_save_error(exc: Exception) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        return (
+            "无法保存：JSON 格式不正确"
+            f"（第 {exc.lineno} 行，第 {exc.colno} 个字符）。"
+            '请使用双引号，例如 {"name": 1}。'
+        )
+    message = str(exc).strip()
+    if message.startswith("invalid literal for int()"):
+        return "无法保存：请输入整数。"
+    if "could not convert string to float" in message:
+        return "无法保存：请输入数字。"
+    if not message:
+        return "无法保存：内容格式不正确。"
+    return f"无法保存：{message}"
+
+
 class EditorRows:
     def snapshot_active_table(self) -> dict[str, Any]:
         return {
@@ -186,14 +203,15 @@ class EditorRows:
             multiline=data_type in {"json", "lua_array", "lua_object"},
             min_lines=1,
             max_lines=6 if data_type in {"json", "lua_array", "lua_object"} else 1,
-            width=self.dialog_width(400),
+            error_max_lines=4,
+            width=self.dialog_width(460),
         )
 
         def save_value(_):
             try:
                 updated_value = parse_data_value(value_input.value or "", data_type)
             except (ValueError, json.JSONDecodeError) as exc:
-                value_input.error_text = f"无法保存：{exc}"
+                value_input.error = _cell_save_error(exc)
                 self.page.update()
                 return
             if row.get(column) != updated_value:

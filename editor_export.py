@@ -5,7 +5,13 @@ import os
 import app_settings
 from agent_ui import agent_provider_label as format_agent_provider_label
 from table_file import export_tsv, load_table
-from export_data import build_export_archive, prepare_export_files, write_export_files
+from export_data import (
+    build_export_archive,
+    checked_export_directory,
+    prepare_export_files,
+    remove_stale_export_files,
+    write_export_files,
+)
 
 
 class EditorExport:
@@ -111,6 +117,7 @@ class EditorExport:
         selected_backend_format = self.backend_format_select.value or "lua"
         selected_frontend_format = self.frontend_format_select.value or "json"
         archive_saved_path: str | None = None
+        removed_exports: list[Path] = []
         try:
             if incremental:
                 paths = selected_table_paths or sorted(
@@ -205,6 +212,25 @@ class EditorExport:
                         raise ValueError(f"导出目录不存在：{path.parent}")
                 for path, data in prepared_outputs:
                     path.write_bytes(data)
+                if not incremental:
+                    kept_outputs = {
+                        os.path.normcase(str(path.resolve()))
+                        for path, _ in prepared_outputs
+                    }
+                    removed_exports.extend(
+                        remove_stale_export_files(
+                            self.export_paths.get("backend"),
+                            selected_backend_format,
+                            kept_outputs,
+                        )
+                    )
+                    removed_exports.extend(
+                        remove_stale_export_files(
+                            self.export_paths.get("frontend"),
+                            selected_frontend_format,
+                            kept_outputs,
+                        )
+                    )
         except (
             OSError,
             RuntimeError,
@@ -265,6 +291,12 @@ class EditorExport:
         )
         if archive_saved_path is not None:
             summary_text += f"\nZIP 已保存至：{archive_saved_path}"
+        if removed_exports:
+            removed_names = [path.name for path in removed_exports]
+            shown_names = "、".join(removed_names[:8])
+            if len(removed_names) > 8:
+                shown_names += f" 等 {len(removed_names)} 个"
+            summary_text += f"\n已删除没有对应配置表的文件：{shown_names}"
         self.show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
@@ -390,6 +422,9 @@ class EditorExport:
                 ft.Text("前端", size=13, weight=ft.FontWeight.W_600, color="#344054"),
                 self.frontend_format_select,
             ]
+            settings_actions = [
+                ft.TextButton("完成", on_click=lambda _: self.page.pop_dialog())
+            ]
         else:
             settings_controls = [
                 ft.Text(
@@ -450,6 +485,54 @@ class EditorExport:
                     wrap=True,
                 ),
             ]
+            form_error = ft.Text("", size=12, color="#D92D20", visible=False)
+            settings_controls.append(form_error)
+
+            def show_form_error(message: str) -> None:
+                form_error.value = message
+                form_error.visible = True
+                self.page.update()
+                self.notify(message, error=True)
+
+            def save_settings(_):
+                try:
+                    configuration = checked_export_directory(
+                        "配置文件目录", self.configuration_directory_field.value
+                    )
+                    backend = checked_export_directory(
+                        "后端导出目录", self.backend_directory_field.value
+                    )
+                    frontend = checked_export_directory(
+                        "前端导出目录", self.frontend_directory_field.value
+                    )
+                except ValueError as exc:
+                    show_form_error(str(exc))
+                    return
+                if configuration is None:
+                    self.configuration_directory = None
+                    self.configuration_directory_field.value = "尚未选择"
+                    self.configuration_table_count.value = "尚未选择配置目录"
+                    self.configuration_count_metric.value = "—"
+                    self.refresh_configuration_files()
+                else:
+                    message = self.apply_configuration_directory(configuration)
+                    if message:
+                        show_form_error(message)
+                        return
+                self.export_paths["backend"] = backend
+                self.export_paths["frontend"] = frontend
+                self.backend_directory_field.value = backend or "尚未选择"
+                self.frontend_directory_field.value = frontend or "尚未选择"
+                self.save_export_settings()
+                self.page.pop_dialog()
+                self.page.update()
+                self.notify("导出设置已保存")
+
+            settings_actions = [
+                ft.TextButton("取消", on_click=lambda _: self.page.pop_dialog()),
+                ft.Button("保存", on_click=save_settings),
+            ]
+
         self.show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
@@ -461,9 +544,7 @@ class EditorExport:
                     spacing=10,
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                actions=[
-                    ft.TextButton("完成", on_click=lambda _: self.page.pop_dialog())
-                ],
+                actions=settings_actions,
                 actions_alignment=ft.MainAxisAlignment.END,
             )
         )

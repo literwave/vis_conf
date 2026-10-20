@@ -136,6 +136,46 @@ class EditorFiles:
         if self.configuration_delete_button is not None:
             self.configuration_delete_button.disabled = self.active_table_path is None
 
+    def reload_configuration_files(self, _=None):
+        if not self.mobile_platform and not self.configuration_directory:
+            self.notify("请先在导出设置中选择 TSV 配置目录。", error=True)
+            return
+        previous = self.active_table_path
+        try:
+            tables = self.configuration_paths()
+        except OSError as exc:
+            self.notify(f"刷新配置表失败：{exc}", error=True)
+            return
+        present = {self.table_path_key(path) for path in tables}
+        for key in list(self.table_states):
+            if key not in present:
+                self.table_states.pop(key, None)
+                self.modified_table_paths.discard(key)
+        missing_name = None
+        if previous is not None and self.table_path_key(previous) not in present:
+            missing_name = previous.name
+            self.active_table_path = None
+            self.source_name = "未选择配置表"
+            self.columns.clear()
+            self.data_types.clear()
+            self.targets.clear()
+            self.annotations.clear()
+            self.rows.clear()
+            self.key_columns.clear()
+            self.source_text.value = self.source_name
+            self.current_page = 0
+        self.update_configuration_count()
+        self.refresh_configuration_files()
+        if missing_name and tables:
+            self.load_configuration_file(tables[0])
+        else:
+            self.refresh_table()
+        self.page.update()
+        if missing_name:
+            self.notify(f"已刷新配置表。「{missing_name}」已不在目录中。")
+        else:
+            self.notify("已刷新配置表")
+
     def load_configuration_file(self, path: Path):
         path_key = self.table_path_key(path)
         if (
@@ -269,14 +309,15 @@ class EditorFiles:
             return
         if directory is None:
             return
-        self.apply_configuration_directory(directory)
+        message = self.apply_configuration_directory(directory)
+        if message:
+            self.notify(message, error=True)
 
-    def apply_configuration_directory(self, directory: str) -> bool:
+    def apply_configuration_directory(self, directory: str) -> str | None:
         try:
             table_count = self.count_configuration_tables(directory)
         except OSError as exc:
-            self.notify(f"读取配置文件目录失败：{exc}", error=True)
-            return False
+            return f"读取配置文件目录失败：{exc}"
         self.configuration_directory = directory
         self.configuration_directory_field.value = directory
         self.configuration_table_count.value = f"目录中有 {table_count} 张 TSV 配置表"
@@ -285,10 +326,9 @@ class EditorFiles:
         try:
             self.refresh_configuration_files()
         except OSError as exc:
-            self.notify(f"读取配置文件目录失败：{exc}", error=True)
-            return False
+            return f"读取配置文件目录失败：{exc}"
         self.page.update()
-        return True
+        return None
 
     async def choose_mobile_configuration_files(self, _):
         try:
@@ -370,7 +410,7 @@ class EditorFiles:
             or any((character in invalid_characters for character in name))
             or any((ord(character) < 32 for character in name))
         ):
-            self.new_configuration_name.error_text = "请输入有效的配置表文件名。"
+            self.new_configuration_name.error = "请输入有效的配置表文件名。"
             self.page.update()
             return
         filename = f"{name}.tsv"
@@ -382,9 +422,7 @@ class EditorFiles:
             self.notify(f"读取配置文件列表失败：{exc}", error=True)
             return
         if filename.casefold() in existing_names:
-            self.new_configuration_name.error_text = (
-                "该配置表已存在，请使用其他文件名。"
-            )
+            self.new_configuration_name.error = "该配置表已存在，请使用其他文件名。"
             self.page.update()
             return
         path = (
@@ -422,7 +460,7 @@ class EditorFiles:
             self.notify("请先在导出设置中选择 TSV 配置目录。", error=True)
             return
         self.new_configuration_name.value = ""
-        self.new_configuration_name.error_text = None
+        self.new_configuration_name.error = None
         self.show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
