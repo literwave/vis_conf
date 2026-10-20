@@ -1,5 +1,6 @@
 import asyncio
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,8 @@ from ai_agent import (
     parse_agent_proposal,
     parse_cursor_model_list,
     request_cursor_proposal,
+    run_api_workspace,
+    run_cursor_workspace,
     validate_api_settings,
 )
 
@@ -171,6 +174,90 @@ class AiAgentTests(unittest.TestCase):
             )
             args = create_process.call_args.args
             self.assertEqual(args[args.index("--model") + 1], "grok-4.7-high")
+
+    def test_cursor_workspace_uses_the_configuration_directory(self):
+        process = SimpleNamespace(
+            communicate=AsyncMock(return_value=(b"done", b"")),
+            returncode=0,
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("ai_agent.shutil.which", return_value="agent"),
+            patch(
+                "ai_agent.asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=process),
+            ) as create_process,
+        ):
+            response = asyncio.run(
+                run_cursor_workspace(
+                    directory,
+                    "把名称改短",
+                    mode="agent",
+                    active_table=str(Path(directory) / "Hero.tsv"),
+                )
+            )
+
+        self.assertEqual(response, "done")
+        self.assertEqual(create_process.call_args.kwargs["cwd"], directory)
+        prompt = create_process.call_args.args[-1]
+        self.assertIn("把名称改短", prompt)
+        self.assertIn("Hero.tsv", prompt)
+        self.assertNotIn("只返回一个 JSON", prompt)
+        self.assertIn("--force", create_process.call_args.args)
+        self.assertNotIn("--mode=ask", create_process.call_args.args)
+
+    def test_deepseek_writes_only_inside_the_configuration_directory(self):
+        def fake_completion(base_url, model, api_key, messages, tools):
+            self.assertEqual(base_url, "https://api.deepseek.com")
+            self.assertEqual(model, "deepseek-chat")
+            self.assertEqual(api_key, "secret")
+            self.assertIn("write_file", [tool["function"]["name"] for tool in tools])
+            if not any(item.get("role") == "tool" for item in messages):
+                return {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "outside",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps(
+                                    {"path": "../secret.txt", "content": "nope"}
+                                ),
+                            },
+                        },
+                        {
+                            "id": "inside",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": json.dumps(
+                                    {"path": "Hero.tsv", "content": "id\tname\n"}
+                                ),
+                            },
+                        },
+                    ],
+                }
+            joined = "\n".join(item["content"] for item in messages if item.get("role") == "tool")
+            self.assertIn("路径超出配置目录", joined)
+            self.assertIn("已写入 Hero.tsv", joined)
+            return {"content": "改好了"}
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("ai_agent._chat_completion", side_effect=fake_completion),
+        ):
+            reply = asyncio.run(
+                run_api_workspace(
+                    "deepseek",
+                    directory,
+                    "改表",
+                    api_key="secret",
+                    mode="agent",
+                )
+            )
+            root = Path(directory)
+            self.assertEqual(reply, "改好了")
+            self.assertEqual((root / "Hero.tsv").read_text(encoding="utf-8"), "id\tname\n")
+            self.assertFalse((root.parent / "secret.txt").exists())
 
     def test_locked_workdir_does_not_fail_the_request(self):
         import tempfile

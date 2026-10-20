@@ -86,14 +86,14 @@ flet build apk --module-name app --project game-config-assistant --org com.liter
 | 复制并插入行 | 选中源行后按 `Ctrl+C`，再选目标行并按 `Ctrl+V`；副本插入目标行之前，不覆盖数据 |
 | 撤销 | 按 `Ctrl+Z` 撤销最近一次编辑、行排序、复制、新增或删除，最多保留 50 步 |
 | 分页 | 可选择每页显示 10、20、50 或 100 行；新增行会追加到表格末尾并跳转到所在页 |
-| AI Agent（桌面端） | 顶部「AI Agent」。Ask 只给预览；Agent 点「应用到当前表」后改当前表并写回 TSV |
+| AI Agent（桌面端，可选） | 在「插件」里安装并打开。Cursor 在配置目录里直接读改文件，结束后重新读取当前表 |
 | 插件（桌面端） | 顶部「插件」。安装、更新、打开、卸载都在这个窗口里 |
 
-复制粘贴快捷键使用应用内行剪贴板，不会替代系统文本剪贴板。单元格里的手动修改不会写回 TSV。Cursor 的 Agent 模式点「应用到当前表」会写回当前打开的 TSV。切换配置表不会丢失当前会话中的编辑。
+复制粘贴快捷键使用应用内行剪贴板，不会替代系统文本剪贴板。单元格里的手动修改不会写回 TSV。安装了 AI Agent 插件后，Cursor 会在配置目录里自己改文件，星图再重新读取当前表。切换配置表不会丢失当前会话中未交给 Cursor 的编辑。
 
 ### 配置 Cursor
 
-星图通过本机的 Cursor Agent CLI 改表，用的是 CLI 自己的登录状态，不需要在星图里填 API Key。Android 没有这项功能。
+星图的 AI Agent 是可选插件。安装后可以选 Cursor、OpenAI 或 DeepSeek，在当前配置目录里阅读和修改文件。Cursor 用本机 CLI 的登录状态。OpenAI 和 DeepSeek 的 API Key 只写入系统凭据库，不写入 `settings.json`。Android 没有这项功能。
 
 #### 1. 安装并登录 CLI
 
@@ -118,24 +118,12 @@ PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查�
 
 #### 2. 在星图里选择模式
 
-1. 打开一张配置表。Agent 只看当前页，不看整张表。
-2. 点顶部「AI Agent」，再点右上角齿轮，打开「AI 服务与连接」。
-3. 「连接方式」选 **Cursor Agent CLI**。
-4. 「Cursor CLI 模式」二选一：
+1. 在导出设置里选好配置文件目录，并打开要处理的表。
+2. 点顶部「插件」，安装「AI Agent」后点「打开」。不安装就没有这项。
+3. 右上角齿轮里选择模型服务：Cursor、OpenAI 或 DeepSeek。Agent 可以改配置目录里的文件，Ask 只读。Cursor 的模型可以留空。OpenAI 默认 `gpt-4o-mini`，DeepSeek 默认 `deepseek-chat`。
+4. 在对话里直接说要做什么。结束后星图会重新读取当前打开的表。对话上方可以新建、切换和删除多段对话，关掉窗口后再打开还在。
 
-   | 模式 | 作用 |
-   |---|---|
-   | Ask（只读问答） | 只显示修改预览，没有「应用到当前表」，不会改表，也不会写文件。这是默认模式。 |
-   | Agent（可调用工具） | 预览之后点「应用到当前表」，修改写入当前表，并保存到打开的 TSV。`Ctrl+Z` 可以撤销，撤销也会写回该 TSV。 |
-
-5. 「Cursor 模型」选 **Auto（CLI 默认）**，或从列表里选一个。列表来自 `agent --list-models`，可以输入名称筛选。读列表失败时，先确认第 1 步的 `agent --version` 能通过。
-6. 点「保存连接」。连接方式、模式和模型写在 `%APPDATA%\GameConfigAssistant\settings.json` 的 `agent` 里。
-
-发请求时，CLI 在临时目录里运行，当前页的数据作为提示传进去。它不会把仓库的 `tsv/` 目录当作工作区。
-
-> Agent 模式除了写当前 TSV，还会让 Cursor CLI 自动执行本机命令。只在信任这次请求时使用。Ask 模式不会改表。
-
-OpenAI 兼容 API 是另一条连接：在同一齿轮里把连接方式改成「OpenAI 兼容 API」，填写 HTTPS 地址、模型名和 API Key。API Key 只进系统凭据库，不写入 `settings.json`。这条连接点「应用到当前表」只改编辑器里的表，不写 TSV。
+> Agent 模式会改配置目录里的文件。Cursor 还会让 CLI 执行本机命令。只在信任这次请求时使用。
 
 ## 插件
 

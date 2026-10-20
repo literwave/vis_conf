@@ -76,6 +76,15 @@ class PluginContext:
     def configuration_directory(self) -> str | None:
         return self._host.configuration_directory()
 
+    def open_table_agent(self) -> None:
+        self._host.open_table_agent()
+
+    def active_table_path(self) -> str | None:
+        return self._host.active_table_path()
+
+    def reload_active_table(self) -> bool:
+        return self._host.reload_active_table()
+
     def get_setting(self, key: str, default: Any = None) -> Any:
         return self._host.get_setting(self.plugin_id, key, default)
 

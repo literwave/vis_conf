@@ -292,40 +292,6 @@ class Workspace(
         )
         self.backend_format_select.on_select = lambda _: self.save_export_settings()
         self.frontend_format_select.on_select = lambda _: self.save_export_settings()
-
-        class _AgentHost:
-            pass
-
-        agent_host = _AgentHost()
-        agent_host.page = self.page
-        agent_host.agent_settings = self.agent_settings
-        agent_host.agent_provider_labels = self.agent_provider_labels
-        agent_host.columns = self.columns
-        agent_host.data_types = self.data_types
-        agent_host.targets = self.targets
-        agent_host.annotations = self.annotations
-        agent_host.key_columns = self.key_columns
-        agent_host.rows = self.rows
-        agent_host.source_text = self.source_text
-        agent_host.type_labels = DATA_TYPES
-        agent_host.target_labels = EXPORT_TARGETS
-        agent_host.source_name = lambda: self.source_name
-        agent_host.current_page = lambda: self.current_page
-        agent_host.page_size = lambda: self.page_size
-        agent_host.column_manager_refresh = lambda: self.column_manager_refresh
-        agent_host.dialog_width = self.dialog_width
-        agent_host.dialog_height = self.dialog_height
-        agent_host.show_alert_dialog = self.show_alert_dialog
-        agent_host.notify = self.notify
-        agent_host.save_export_settings = self.save_export_settings
-        agent_host.refresh_agent_provider_labels = self.refresh_agent_provider_labels
-        agent_host.record_row_undo = self.record_row_undo
-        agent_host.mark_active_table_modified = self.mark_active_table_modified
-        agent_host.persist_active_table = self.persist_active_table
-        agent_host.refresh_table = self.refresh_table
-        agent_host.parse_data_value = parse_data_value
-        agent_host.display_value = _display_value
-        open_agent_settings, open_ai_agent = create_agent_dialogs(agent_host)
         self.configuration_delete_button = ft.IconButton(
             icon=ft.Icons.DELETE_OUTLINE,
             icon_size=18,
@@ -468,12 +434,6 @@ class Workspace(
         self.header_actions = ft.Row(
             [
                 self.mobile_configuration_button,
-                ft.OutlinedButton(
-                    "AI Agent",
-                    icon=ft.Icons.SMART_TOY,
-                    on_click=open_ai_agent,
-                    visible=not self.mobile_platform,
-                ),
                 ft.OutlinedButton(
                     "插件",
                     icon=ft.Icons.EXTENSION_OUTLINED,
@@ -740,6 +700,45 @@ class Workspace(
         if startup_errors:
             self.notify("；".join(startup_errors), error=True)
 
+    def open_table_agent(self, _=None):
+        opener = getattr(self, "_open_ai_agent", None)
+        if opener is None:
+            class _AgentHost:
+                pass
+
+            agent_host = _AgentHost()
+            agent_host.page = self.page
+            agent_host.agent_settings = self.agent_settings
+            agent_host.agent_provider_labels = self.agent_provider_labels
+            agent_host.columns = self.columns
+            agent_host.data_types = self.data_types
+            agent_host.targets = self.targets
+            agent_host.annotations = self.annotations
+            agent_host.key_columns = self.key_columns
+            agent_host.rows = self.rows
+            agent_host.source_text = self.source_text
+            agent_host.type_labels = DATA_TYPES
+            agent_host.target_labels = EXPORT_TARGETS
+            agent_host.source_name = lambda: self.source_name
+            agent_host.current_page = lambda: self.current_page
+            agent_host.page_size = lambda: self.page_size
+            agent_host.column_manager_refresh = lambda: self.column_manager_refresh
+            agent_host.dialog_width = self.dialog_width
+            agent_host.dialog_height = self.dialog_height
+            agent_host.show_alert_dialog = self.show_alert_dialog
+            agent_host.notify = self.notify
+            agent_host.save_export_settings = self.save_export_settings
+            agent_host.refresh_agent_provider_labels = self.refresh_agent_provider_labels
+            agent_host.record_row_undo = self.record_row_undo
+            agent_host.mark_active_table_modified = self.mark_active_table_modified
+            agent_host.persist_active_table = self.persist_active_table
+            agent_host.refresh_table = self.refresh_table
+            agent_host.parse_data_value = parse_data_value
+            agent_host.display_value = _display_value
+            _, opener = create_agent_dialogs(agent_host)
+            self._open_ai_agent = opener
+        opener(None)
+
     def refresh_plugin_actions(self, update: bool = False):
         try:
             actions, errors = load_plugins(_PluginHost(self))
@@ -938,6 +937,16 @@ class _PluginHost:
 
     def configuration_directory(self) -> str | None:
         return self.workspace.configuration_directory
+
+    def open_table_agent(self) -> None:
+        self.workspace.open_table_agent()
+
+    def active_table_path(self) -> str | None:
+        path = self.workspace.active_table_path
+        return str(path) if path is not None else None
+
+    def reload_active_table(self) -> bool:
+        return self.workspace.reload_active_table()
 
     def get_setting(self, plugin_id: str, key: str, default=None):
         bucket = self.workspace.plugin_settings.get(plugin_id)

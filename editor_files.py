@@ -188,6 +188,44 @@ class EditorFiles:
         self.refresh_table()
         self.notify(f"已打开 {self.source_name}（{len(self.rows)} 条记录）")
 
+    def reload_active_table(self) -> bool:
+        path = self.active_table_path
+        if path is None:
+            return False
+        path = Path(path)
+        if not path.is_file():
+            return False
+        path_key = self.table_path_key(path)
+        self.table_states.pop(path_key, None)
+        try:
+            (
+                loaded_columns,
+                loaded_types,
+                loaded_targets,
+                loaded_annotations,
+                loaded_rows,
+            ) = load_table(path)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            self.notify(f"重新读取配置表失败：{exc}", error=True)
+            return False
+        self.columns[:] = loaded_columns
+        self.data_types[:] = loaded_types
+        self.targets[:] = loaded_targets
+        self.annotations[:] = loaded_annotations
+        self.rows[:] = loaded_rows
+        saved_keys = self.key_rules_by_table.get(path.name)
+        self.key_columns[:] = (
+            [column for column in loaded_columns if column in saved_keys]
+            if saved_keys is not None
+            else ["id"] if "id" in loaded_columns else []
+        )
+        page_count = max(1, (len(self.rows) + self.page_size - 1) // self.page_size)
+        if self.current_page >= page_count:
+            self.current_page = page_count - 1
+        self.table_states[path_key] = self.snapshot_active_table()
+        self.refresh_table()
+        return True
+
     async def choose_export_directory(self, target: str):
         field = (
             self.backend_directory_field

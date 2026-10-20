@@ -1,5 +1,7 @@
 import asyncio
+from contextlib import contextmanager
 import json
+import shutil
 from types import SimpleNamespace
 from pathlib import Path
 import tempfile
@@ -9,6 +11,16 @@ from unittest.mock import AsyncMock, patch
 import flet as ft
 
 from app import main
+
+
+@contextmanager
+def _installed_table_agent():
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory)
+        source = Path(__file__).resolve().parents[1] / "plugin_catalog" / "table_agent.py"
+        shutil.copyfile(source, target / source.name)
+        with patch("plugin_host.user_plugin_directory", return_value=target):
+            yield
 
 
 class FakePage:
@@ -61,7 +73,7 @@ class MobileLayoutTests(unittest.TestCase):
         ]
 
     @staticmethod
-    def _click_labeled(root, label):
+    def _find_labeled(root, label):
         def walk(control, seen):
             if control is None or id(control) in seen:
                 return None
@@ -76,7 +88,39 @@ class MobileLayoutTests(unittest.TestCase):
                     return found
             return walk(getattr(control, "content", None), seen)
 
-        walk(root, set()).on_click(None)
+        found = walk(root, set())
+        if found is None:
+            raise AssertionError(f"找不到 {label}")
+        return found
+
+    @staticmethod
+    def _click_labeled(root, label):
+        MobileLayoutTests._find_labeled(root, label).on_click(None)
+
+    @staticmethod
+    def _conversation_dropdown(dialog):
+        def walk(control, seen):
+            if control is None or id(control) in seen:
+                return None
+            seen.add(id(control))
+            if isinstance(control, ft.Dropdown) and control.options:
+                return control
+            for child in getattr(control, "controls", None) or []:
+                found = walk(child, seen)
+                if found is not None:
+                    return found
+            return walk(getattr(control, "content", None), seen)
+
+        found = walk(dialog, set())
+        if found is None:
+            raise AssertionError("找不到对话列表")
+        return found
+
+    @staticmethod
+    def _open_ai_agent(page):
+        MobileLayoutTests._click_labeled(page, "插件")
+        dialog = page.dialogs[-1]
+        asyncio.run(MobileLayoutTests._find_labeled(dialog, "打开").on_click(None))
 
     @staticmethod
     def _row_ids(page):
@@ -507,46 +551,47 @@ class MobileLayoutTests(unittest.TestCase):
                 )
             )
 
-    def test_agent_apply_writes_open_tsv(self):
+    def test_agent_runs_in_the_configuration_directory_and_reloads_the_table(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            table_path = root / "Hero.tsv"
+            table_path = root / 'Hero.tsv'
             table_path.write_text(
-                "id\tname\ttype\trarity\tprice\n"
-                "integer\tstring\tstring\tstring\tinteger\n"
-                "both\tboth\tboth\tboth\tboth\n"
-                "标识\t名称\t类型\t品质\t价格\n"
-                "1001\t新手长剑\t武器\t普通\t10\n",
-                encoding="utf-8",
+                'id\tname\ttype\trarity\tprice\n'
+                'integer\tstring\tstring\tstring\tinteger\n'
+                'both\tboth\tboth\tboth\tboth\n'
+                '标识\t名称\t类型\t品质\t价格\n'
+                '1001\t新手长剑\t武器\t普通\t10\n',
+                encoding='utf-8',
             )
             page = FakePage(width=1260)
             page.platform = ft.PagePlatform.WINDOWS
-            response = json.dumps(
-                {
-                    "message": "建议统一名称。",
-                    "changes": [{"row": 1, "column": "name", "value": "长剑"}],
-                },
-                ensure_ascii=False,
-            )
+
+            async def run_agent(workspace, prompt, **kwargs):
+                self.assertEqual(Path(workspace), root)
+                self.assertIn('缩短名称', prompt)
+                self.assertNotIn('只返回一个 JSON', prompt)
+                self.assertEqual(kwargs['mode'], 'agent')
+                self.assertEqual(Path(kwargs['active_table']), table_path)
+                table_path.write_text(
+                    table_path.read_text(encoding='utf-8').replace('新手长剑', '长剑'),
+                    encoding='utf-8',
+                )
+                return '已把名称改成短名。'
+
             with (
+                _installed_table_agent(),
                 patch(
-                    "app_settings._load_app_settings",
+                    'app_settings._load_app_settings',
                     return_value=(
-                        {
-                            "configuration_directory": str(root),
-                            "agent": {"provider": "cursor", "cursor_mode": "agent"},
-                        },
+                        {'configuration_directory': str(root)},
                         None,
                     ),
                 ),
                 patch(
-                    "app_settings._app_settings_path",
-                    return_value=root / "settings.json",
+                    'app_settings._app_settings_path',
+                    return_value=root / 'settings.json',
                 ),
-                patch(
-                    "agent_ui.request_cursor_proposal",
-                    new=AsyncMock(return_value=response),
-                ),
+                patch('ai_agent.run_cursor_workspace', new=run_agent),
             ):
                 main(page)
                 file_list = page.controls[0].controls[0].content.controls[6].content
@@ -555,253 +600,113 @@ class MobileLayoutTests(unittest.TestCase):
                     for control in file_list.controls
                     if control.tooltip == str(table_path)
                 ).on_click(None)
-                header_actions = (
-                    page.controls[0].controls[1].content.controls[0].content.controls[2]
-                )
-                agent_button = next(
-                    control
-                    for control in header_actions.controls
-                    if getattr(control, "content", None) == "AI Agent"
-                )
-                agent_button.on_click(None)
+                self._open_ai_agent(page)
                 dialog = page.dialogs[-1]
-                prompt_input, send_button = dialog.content.controls[3].controls
-                prompt_input.value = "缩短名称"
+                prompt_input, send_button = dialog.content.controls[2].controls
+                prompt_input.value = '缩短名称'
                 asyncio.run(send_button.on_click(None))
 
-            unchanged = table_path.read_text(encoding="utf-8")
-            self.assertIn("新手长剑", unchanged)
-            next(
-                action for action in dialog.actions if action.content == "应用到当前表"
-            ).on_click(None)
+            self.assertIn('长剑', table_path.read_text(encoding='utf-8'))
+            self.assertNotIn('新手长剑', table_path.read_text(encoding='utf-8'))
+            messages = dialog.content.controls[1]
+            self.assertEqual(messages.controls[1].value, '已把名称改成短名。')
+            self.assertEqual(messages.controls[2].value, '已重新读取当前配置表。')
 
-            saved = table_path.read_text(encoding="utf-8")
-            self.assertIn("长剑", saved)
-            self.assertNotIn("新手长剑", saved)
-            table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
-            undo_button = table_card.content.controls[1].controls[0].controls[3]
-            undo_button.on_click(None)
-            restored = table_path.read_text(encoding="utf-8")
-            self.assertIn("新手长剑", restored)
-
-    def test_agent_previews_changes_and_applies_only_after_confirmation(self):
+    def test_agent_shows_the_reply_without_a_json_apply_step(self):
         page = FakePage(width=1260)
         page.platform = ft.PagePlatform.WINDOWS
-        response = json.dumps(
-            {
-                "message": "建议统一名称。",
-                "changes": [
-                    {"row": 1, "column": "name", "value": "长剑"},
-                ],
-            },
-            ensure_ascii=False,
-        )
-        with (
-            patch("app_settings._load_app_settings", return_value=({}, None)),
-            patch(
-                "agent_ui.request_cursor_proposal",
-                new=AsyncMock(return_value=response),
-            ),
-        ):
-            main(page)
-            header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
-            agent_button = next(
-                control
-                for control in header_actions.controls
-                if getattr(control, "content", None) == "AI Agent"
-            )
-            agent_button.on_click(None)
 
-            dialog = page.dialogs[-1]
-            messages_view = dialog.content.controls[1]
-            pending_preview = dialog.content.controls[2]
-            prompt_input, send_button = dialog.content.controls[3].controls
-            self.assertFalse(dialog.scrollable)
-            self.assertIsNone(dialog.content.scroll)
-            self.assertIsNone(dialog.content.height)
-            self.assertFalse(messages_view.expand)
-            self.assertGreaterEqual(messages_view.height, 100)
-            self.assertLessEqual(messages_view.height + 460, page.height)
-            self.assertEqual(messages_view.scroll, ft.ScrollMode.AUTO)
-            self.assertEqual(len(dialog.content.controls), 4)
-            self.assertEqual(dialog.title.controls[-1].tooltip, "关闭")
-            self.assertEqual(dialog.actions[0].content, "完成")
-            dialog.actions[0].on_click(None)
-            self.assertNotIn(dialog, page.dialogs)
-            agent_button.on_click(None)
-            dialog = page.dialogs[-1]
-            messages_view = dialog.content.controls[1]
-            pending_preview = dialog.content.controls[2]
-            prompt_input, send_button = dialog.content.controls[3].controls
-            self.assertTrue(prompt_input.shift_enter)
-            self.assertIs(prompt_input.on_submit, send_button.on_click)
-            prompt_input.value = "缩短名称"
-            asyncio.run(send_button.on_click(None))
-
-            self.assertEqual(
-                messages_view.controls[-1].value,
-                "建议统一名称。",
-            )
-            self.assertTrue(
-                any(
-                    isinstance(control, ft.Text)
-                    and "新手长剑 → 长剑" in control.value
-                    for control in pending_preview.controls
-                )
-            )
-            self.assertEqual(self._table_rows(page)[0].content.controls[2].content.value, "新手长剑")
-            self.assertFalse(
-                any(action.content == "应用到当前表" for action in dialog.actions)
-            )
-            self.assertEqual(dialog.actions[0].content, "完成")
-
-    def test_agent_adds_and_deletes_columns_after_confirmation(self):
-        page = FakePage(width=1260)
-        page.platform = ft.PagePlatform.WINDOWS
-        response = json.dumps(
-            {
-                "message": "调整列。",
-                "changes": [{"row": 1, "column": "desc", "value": "新手武器"}],
-                "column_additions": [
-                    {
-                        "name": "desc",
-                        "type": "string",
-                        "target": "both",
-                        "annotation": "描述",
-                        "default": "",
-                    }
-                ],
-                "column_deletions": ["rarity"],
-            },
-            ensure_ascii=False,
-        )
-
-        def text_values(control, seen=None):
-            if seen is None:
-                seen = set()
-            if control is None or id(control) in seen:
-                return []
-            seen.add(id(control))
-            found = []
-            if isinstance(control, ft.Text) and isinstance(control.value, str):
-                found.append(control.value)
-            for child in getattr(control, "controls", None) or []:
-                found.extend(text_values(child, seen))
-            found.extend(text_values(getattr(control, "content", None), seen))
-            return found
+        async def run_agent(workspace, prompt, **kwargs):
+            self.assertIn('看看这张表', prompt)
+            return '这张表有一件武器。'
 
         with (
-            patch(
-                "app_settings._load_app_settings",
-                return_value=(
-                    {"agent": {"provider": "cursor", "cursor_mode": "agent"}},
-                    None,
-                ),
-            ),
-            patch("agent_ui.request_cursor_proposal", new=AsyncMock(return_value=response)),
-            patch(
-                "app_settings._app_settings_path",
-                return_value=Path(tempfile.mkdtemp()) / "settings.json",
-            ),
+            _installed_table_agent(),
+            patch('app_settings._load_app_settings', return_value=({'configuration_directory': 'D:/tables'}, None)),
+            patch('app_settings._app_settings_path', return_value=Path(tempfile.gettempdir()) / 'vis-conf-agent-test-settings.json'),
+            patch('ai_agent.run_cursor_workspace', new=run_agent),
         ):
             main(page)
-            header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
-            agent_button = next(
-                control
-                for control in header_actions.controls
-                if getattr(control, "content", None) == "AI Agent"
-            )
-            agent_button.on_click(None)
+            self._open_ai_agent(page)
             dialog = page.dialogs[-1]
-            pending_preview = dialog.content.controls[2]
-            prompt_input, send_button = dialog.content.controls[3].controls
-            prompt_input.value = "删掉品质并加描述"
+            self.assertEqual(dialog.title.controls[0].controls[0].value, "AI Agent")
+            prompt_input, send_button = dialog.content.controls[2].controls
+            prompt_input.value = '看看这张表'
             asyncio.run(send_button.on_click(None))
+            self.assertEqual(dialog.content.controls[1].controls[1].value, '这张表有一件武器。')
+            self.assertFalse(any(getattr(action, 'content', None) == '应用到当前表' for action in dialog.actions))
 
-            preview_text = " ".join(text_values(pending_preview))
-            self.assertIn("删除列 · rarity", preview_text)
-            self.assertIn("新增列 · desc", preview_text)
-            table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
-            self.assertIn("rarity", text_values(table_card))
-            self.assertNotIn("desc", text_values(table_card))
-
-            next(
-                action for action in dialog.actions if action.content == "应用到当前表"
-            ).on_click(None)
-
-        table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
-        applied = text_values(table_card)
-        self.assertNotIn("rarity", applied)
-        self.assertIn("desc", applied)
-        self.assertIn("新手武器", applied)
-        undo_button = table_card.content.controls[1].controls[0].controls[3]
-        undo_button.on_click(None)
-        restored = text_values(table_card)
-        self.assertIn("rarity", restored)
-        self.assertNotIn("desc", restored)
-
-    def test_title_close_drops_unapplied_preview(self):
+    def test_agent_keeps_separate_conversations(self):
         page = FakePage(width=1260)
         page.platform = ft.PagePlatform.WINDOWS
-        response = json.dumps(
-            {
-                "message": "已建议新增描述列。",
-                "changes": [],
-                "column_additions": [
-                    {
-                        "name": "desc",
-                        "type": "字符串",
-                        "target": "前后端",
-                        "annotation": "描述",
-                        "default": "",
-                    }
-                ],
-                "column_deletions": [],
-            },
-            ensure_ascii=False,
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
+        seen_history = []
+
+        async def run_agent(workspace, prompt, **kwargs):
+            seen_history.append(list(kwargs.get("history") or []))
+            return f"回复：{prompt}"
+
+        def message_text(column):
+            values = []
+
+            def walk(control, seen):
+                if control is None or id(control) in seen:
+                    return
+                seen.add(id(control))
+                value = getattr(control, "value", None)
+                if isinstance(value, str):
+                    values.append(value)
+                for child in getattr(control, "controls", None) or []:
+                    walk(child, seen)
+                walk(getattr(control, "content", None), seen)
+
+            walk(column, set())
+            return values
+
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
             with (
-                patch("app_settings._load_app_settings", return_value=({}, None)),
-                patch("agent_ui.request_cursor_proposal", new=AsyncMock(return_value=response)),
+                _installed_table_agent(),
                 patch(
-                    "app_settings._app_settings_path",
-                    return_value=Path(temporary_directory) / "settings.json",
+                    "app_settings._load_app_settings",
+                    return_value=({"configuration_directory": "D:/tables"}, None),
                 ),
+                patch("app_settings._app_settings_path", return_value=settings_path),
+                patch("ai_agent.run_cursor_workspace", new=run_agent),
             ):
                 main(page)
-                header_actions = page.controls[0].controls[1].content.controls[0].content.controls[2]
-                agent_button = next(
-                    control
-                    for control in header_actions.controls
-                    if getattr(control, "content", None) == "AI Agent"
-                )
-                agent_button.on_click(None)
+                self._open_ai_agent(page)
                 dialog = page.dialogs[-1]
-                prompt_input, send_button = dialog.content.controls[3].controls
-                prompt_input.value = "加一列描述"
+                self.assertEqual(len(self._conversation_dropdown(dialog).options), 1)
+                self._click_labeled(dialog, "新对话")
+                self.assertEqual(len(self._conversation_dropdown(dialog).options), 2)
+                prompt_input, send_button = dialog.content.controls[2].controls
+                prompt_input.value = "第一段"
                 asyncio.run(send_button.on_click(None))
+                self._click_labeled(dialog, "新对话")
+                self.assertEqual(dialog.content.controls[1].controls, [])
+                prompt_input.value = "第二段"
+                asyncio.run(send_button.on_click(None))
+                self.assertEqual(seen_history[1], [])
+                dropdown = self._conversation_dropdown(dialog)
+                dropdown.value = next(option.key for option in dropdown.options if option.text == "第一段")
+                dropdown.on_select(SimpleNamespace(control=dropdown))
+                shown = message_text(dialog.content.controls[1])
+                self.assertIn("第一段", shown)
+                self.assertIn("回复：第一段", shown)
+                self.assertNotIn("第二段", shown)
 
-                def text_values(control, seen=None):
-                    if seen is None:
-                        seen = set()
-                    if control is None or id(control) in seen:
-                        return []
-                    seen.add(id(control))
-                    found = []
-                    if isinstance(control, ft.Text) and isinstance(control.value, str):
-                        found.append(control.value)
-                    for child in getattr(control, "controls", None) or []:
-                        found.extend(text_values(child, seen))
-                    found.extend(text_values(getattr(control, "content", None), seen))
-                    return found
-
-                table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
-                next(action for action in dialog.actions if action.content == "完成").on_click(
-                    None
-                )
-                self.assertNotIn(dialog, page.dialogs)
-                self.assertNotIn("desc", text_values(table_card))
+                page.pop_dialog()
+                self._open_ai_agent(page)
+                dialog = page.dialogs[-1]
+                shown = message_text(dialog.content.controls[1])
+                self.assertIn("回复：第一段", shown)
+                self.assertNotIn("第二段", shown)
+                dropdown = self._conversation_dropdown(dialog)
+                dropdown.value = next(option.key for option in dropdown.options if option.text == "第二段")
+                dropdown.on_select(SimpleNamespace(control=dropdown))
+                shown = message_text(dialog.content.controls[1])
+                self.assertIn("回复：第二段", shown)
+                self.assertNotIn("第一段", shown)
 
 
 if __name__ == "__main__":

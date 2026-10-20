@@ -14,6 +14,60 @@ from typing import Any
 
 CREDENTIAL_SERVICE = "GameConfigAssistant"
 CREDENTIAL_USERNAME = "openai-compatible-api-key"
+API_PROVIDERS = {
+    "openai": {
+        "label": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4o-mini",
+        "credential": "openai-api-key",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "default_model": "deepseek-chat",
+        "credential": "deepseek-api-key",
+    },
+}
+_WORKSPACE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "列出配置目录中的文件和子目录。",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取配置目录中的文本文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "把文本写入配置目录中的文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+]
 MAX_AGENT_OUTPUT_BYTES = 2_000_000
 MAX_AGENT_INPUT_BYTES = 1_000_000
 MAX_CURSOR_PROMPT_CHARS = 24_000
@@ -55,15 +109,192 @@ def load_api_key() -> str | None:
 
 
 def save_api_key(api_key: str | None) -> None:
+    save_provider_api_key("openai-compatible", api_key)
+
+
+def load_provider_api_key(provider: str) -> str | None:
+    username = API_PROVIDERS[provider]["credential"]
+    try:
+        import keyring
+
+        return keyring.get_password(CREDENTIAL_SERVICE, username)
+    except Exception as exc:
+        raise RuntimeError(f"无法访问系统凭据库：{exc}") from exc
+
+
+def save_provider_api_key(provider: str, api_key: str | None) -> None:
+    username = (
+        API_PROVIDERS[provider]["credential"]
+        if provider in API_PROVIDERS
+        else CREDENTIAL_USERNAME
+    )
     try:
         import keyring
 
         if api_key:
-            keyring.set_password(CREDENTIAL_SERVICE, CREDENTIAL_USERNAME, api_key)
+            keyring.set_password(CREDENTIAL_SERVICE, username, api_key)
         else:
-            keyring.delete_password(CREDENTIAL_SERVICE, CREDENTIAL_USERNAME)
+            keyring.delete_password(CREDENTIAL_SERVICE, username)
     except Exception as exc:
         raise RuntimeError(f"无法安全保存 API Key：{exc}") from exc
+
+
+def _workspace_file(root: Path, raw: str) -> Path:
+    text = (raw or ".").strip() or "."
+    candidate = Path(text)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        raise ValueError("路径超出配置目录。")
+    return resolved
+
+
+def _run_workspace_tool(root: Path, name: str, arguments: dict[str, Any], allow_write: bool) -> str:
+    try:
+        if name == "list_files":
+            path = _workspace_file(root, str(arguments.get("path") or "."))
+            if not path.is_dir():
+                return "不是目录。"
+            return "\n".join(sorted(item.name for item in path.iterdir())) or "目录是空的。"
+        if name == "read_file":
+            path = _workspace_file(root, str(arguments.get("path") or ""))
+            return path.read_text(encoding="utf-8")
+        if name == "write_file":
+            if not allow_write:
+                return "当前是只读模式，不能写文件。"
+            path = _workspace_file(root, str(arguments.get("path") or ""))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(arguments.get("content") or ""), encoding="utf-8", newline="\n")
+            return f"已写入 {path.relative_to(root.resolve())}"
+        return f"未知工具 {name}"
+    except (OSError, UnicodeError, ValueError) as exc:
+        return str(exc)
+
+
+def _chat_completion(
+    base_url: str,
+    model: str,
+    api_key: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    endpoint = base_url.rstrip("/") + "/chat/completions"
+    body: dict[str, Any] = {"model": model, "messages": messages, "temperature": 0.2}
+    if tools:
+        body["tools"] = tools
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    if len(payload) > MAX_AGENT_INPUT_BYTES:
+        raise RuntimeError("请求过大，请缩小文件或缩短对话后重试。")
+    request = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        opener = urllib.request.build_opener(_RejectRedirects)
+        with opener.open(request, timeout=120) as response:
+            response_body = response.read(MAX_AGENT_OUTPUT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        details = exc.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"模型服务返回 HTTP {exc.code}：{details}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"无法连接模型服务：{exc}") from exc
+    if len(response_body) > MAX_AGENT_OUTPUT_BYTES:
+        raise RuntimeError("模型服务响应过大，已停止读取。")
+    try:
+        result = json.loads(response_body)
+        message = result["choices"][0]["message"]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("模型服务响应格式无效，预期 OpenAI 兼容的 chat completion。") from exc
+    if not isinstance(message, dict):
+        raise RuntimeError("模型服务响应格式无效，预期 OpenAI 兼容的 chat completion。")
+    return message
+
+
+async def run_api_workspace(
+    provider: str,
+    workspace: str,
+    prompt: str,
+    *,
+    mode: str = "agent",
+    model: str = "",
+    api_key: str,
+    history: list[dict[str, str]] | None = None,
+    active_table: str | None = None,
+) -> str:
+    if provider not in API_PROVIDERS:
+        raise ValueError("模型服务只能是 OpenAI 或 DeepSeek。")
+    if mode not in {"ask", "agent"}:
+        raise ValueError("模式只能选择 ask 或 agent。")
+    root = Path(workspace)
+    if not root.is_dir():
+        raise RuntimeError("配置目录不存在。请先在导出设置里选择配置文件目录。")
+    if not api_key.strip():
+        raise RuntimeError("请先在连接设置里保存 API Key。")
+    profile = API_PROVIDERS[provider]
+    selected_model = model.strip() or profile["default_model"]
+    base_url, selected_model = validate_api_settings(profile["base_url"], selected_model)
+    allow_write = mode == "agent"
+    tools = [
+        tool
+        for tool in _WORKSPACE_TOOLS
+        if allow_write or tool["function"]["name"] != "write_file"
+    ]
+    context = [f"配置目录：{root}"]
+    if active_table:
+        context.append(f"当前打开的配置表：{active_table}")
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": (
+                "你在游戏配置目录里工作。用工具列出、读取"
+                + ("和写入" if allow_write else "")
+                + "这个目录中的文件，然后用自然语言回复。"
+            ),
+        },
+        *(
+            {"role": turn["role"], "content": turn["content"]}
+            for turn in (history or [])
+            if turn.get("role") in {"user", "assistant"} and isinstance(turn.get("content"), str)
+        ),
+        {"role": "user", "content": "\n".join([*context, "", prompt])},
+    ]
+    for _ in range(16):
+        message = await asyncio.to_thread(
+            _chat_completion, base_url, selected_model, api_key, messages, tools
+        )
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("模型服务返回了空回复。")
+            return content.strip()
+        messages.append(message)
+        for call in tool_calls:
+            function = call.get("function") or {}
+            name = function.get("name") or ""
+            raw_arguments = function.get("arguments") or "{}"
+            try:
+                arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+            except json.JSONDecodeError:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            result = _run_workspace_tool(root, name, arguments, allow_write)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or "",
+                    "content": result,
+                }
+            )
+    raise RuntimeError("模型连续调用工具次数过多，已停止。")
 
 
 def parse_agent_proposal(response: str) -> dict[str, Any]:
@@ -359,6 +590,75 @@ def _cursor_cli_argv(executable: str) -> list[str]:
         return [executable]
     latest = max(candidates, key=lambda item: _cursor_version_key(item.name))
     return [str(latest / "node.exe"), str(latest / "index.js")]
+
+
+async def run_cursor_workspace(
+    workspace: str,
+    prompt: str,
+    *,
+    mode: str = "agent",
+    model: str = "",
+    history: list[dict[str, str]] | None = None,
+    active_table: str | None = None,
+) -> str:
+    """Run Cursor in the real configuration directory.
+
+    The CLI keeps its own tools. The prompt is the user's request plus the
+    open table path, not a fixed JSON schema or a single page of cells.
+    """
+    if mode not in {"ask", "agent"}:
+        raise ValueError("Cursor Agent 模式只能选择 ask 或 agent。")
+    root = Path(workspace)
+    if not root.is_dir():
+        raise RuntimeError("配置目录不存在。请先在导出设置里选择配置文件目录。")
+    executable = shutil.which("agent") or shutil.which("cursor-agent")
+    if executable is None:
+        raise RuntimeError(
+            "未找到 Cursor Agent CLI。请安装 Cursor CLI 并完成登录。"
+        )
+    parts: list[str] = []
+    if history:
+        parts.append(
+            "此前对话：\n"
+            + "\n".join(
+                f"{'用户' if turn['role'] == 'user' else 'Agent'}：{turn['content']}"
+                for turn in history
+            )
+        )
+    if active_table:
+        parts.append(f"当前打开的配置表：{active_table}")
+    parts.append(prompt)
+    full_prompt = "\n\n".join(parts)
+    env = os.environ.copy()
+    env.setdefault("CURSOR_INVOKED_AS", Path(executable).name)
+    process = await asyncio.create_subprocess_exec(
+        *_cursor_cli_argv(executable),
+        *_cursor_mode_args(mode),
+        *_cursor_model_args(model),
+        full_prompt,
+        cwd=str(root),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+    except TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise RuntimeError("Cursor Agent CLI 请求超时（10 分钟）。") from exc
+    if process.returncode != 0:
+        details = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"Cursor Agent CLI 退出码 {process.returncode}"
+            + (f"：{details[:2000]}" if details else "。")
+        )
+    if len(stdout) > MAX_AGENT_OUTPUT_BYTES:
+        raise RuntimeError("Cursor Agent CLI 响应过大，已停止读取。")
+    response = stdout.decode("utf-8", errors="replace").strip()
+    if not response:
+        raise RuntimeError("Cursor Agent CLI 返回了空回复。")
+    return response
 
 
 async def request_cursor_proposal(
