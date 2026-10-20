@@ -143,7 +143,7 @@ def protocol_desc_directory(tools_dir: Path) -> Path:
 
 
 def default_pb_directory(tools_dir: Path) -> Path:
-    return tools_dir.parent / "server" / "proto" / "pb"
+    return tools_dir.parent / "pb"
 
 
 def _saved_directory(saved: str | None) -> Path | None:
@@ -581,8 +581,8 @@ def run_protocol_export(
     generated_pb = default_pb_directory(tools_dir)
     destination = pb_dir or generated_pb
     copied = _copy_pb_files(generated_pb, destination)
-    client_net_pb = tools_dir.parent / "client" / "proto" / "net_pb.json"
-    server_net_pb = tools_dir.parent / "server" / "proto" / "net_pb.lua"
+    client_net_pb = tools_dir.parent / "client" / "net_pb.json"
+    server_net_pb = tools_dir.parent / "server" / "net_pb.lua"
     summary = "\n".join(
         [
             "协议已导出。",
@@ -825,7 +825,7 @@ class ProtocolEditor:
                     content=ft.Column(
                         [
                             ft.Text(
-                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 server/proto/pb。C# 仍写到脚本原来的位置。协议号写到 client/proto/net_pb.json 和 server/proto/net_pb.lua。",
+                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 pb。C# 仍写到脚本原来的位置。协议号写到 client/net_pb.json 和 server/net_pb.lua。",
                                 size=12,
                                 color="#667085",
                             ),
