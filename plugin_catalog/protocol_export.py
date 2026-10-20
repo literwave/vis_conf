@@ -1,4 +1,4 @@
-"""编辑 proto 协议和字段，并导出 pb 和 C#。"""
+"""编辑 proto 协议和字段，并导出 pb、C# 和 net_pb。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import flet as ft
 from plugin_host import PluginAction, PluginContext
 
 PLUGIN_TITLE = "协议"
-PLUGIN_DESCRIPTION = "编辑 proto 协议和字段，并导出 pb 和 C#。"
+PLUGIN_DESCRIPTION = "编辑 proto 协议和字段，并导出 pb、C# 和 net_pb。"
 
 SCALAR_TYPES = (
     "int32",
@@ -581,11 +581,15 @@ def run_protocol_export(
     generated_pb = default_pb_directory(tools_dir)
     destination = pb_dir or generated_pb
     copied = _copy_pb_files(generated_pb, destination)
+    client_net_pb = tools_dir.parent / "client" / "proto" / "net_pb.json"
+    server_net_pb = tools_dir.parent / "server" / "proto" / "net_pb.lua"
     summary = "\n".join(
         [
             "协议已导出。",
             f"pb：{destination}" + (f"（{copied} 个文件）" if copied else ""),
             f"C#：{tools_dir / 'proto' / 'outcs'}",
+            f"客户端 net_pb：{client_net_pb}",
+            f"后端 net_pb：{server_net_pb}",
             "",
         ]
     )
@@ -821,7 +825,7 @@ class ProtocolEditor:
                     content=ft.Column(
                         [
                             ft.Text(
-                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 server/proto/pb。C# 仍写到脚本原来的位置。",
+                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 server/proto/pb。C# 仍写到脚本原来的位置。协议号写到 client/proto/net_pb.json 和 server/proto/net_pb.lua。",
                                 size=12,
                                 color="#667085",
                             ),
