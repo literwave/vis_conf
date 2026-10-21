@@ -114,7 +114,38 @@ flet build apk --module-name app --project game-config-assistant --org com.liter
 3. 运行 `agent`，按提示在浏览器里登录 Cursor 账号。登录完成后可以退出 CLI。
 4. 星图如果在安装或登录之前就开着，先完全退出，再重新运行 `python app.py`，否则它读不到更新后的 PATH。
 
-PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查安装目录是否在用户 PATH 里，改完后再重启星图。
+PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查安装目录是否在用户 PATH 里，改完后再重启星图。确认命令时写成 `agent --version`（两个短横线）。
+
+星图提示「未找到 Cursor Agent CLI」时，多半是星图在安装 CLI 之前就启动了，进程里的 PATH 还是旧的。先完全退出星图，再从新开的 PowerShell 里运行 `agent --version`。能打出版本号后，在同一个窗口里运行 `python app.py`。
+
+#### 重装 CLI
+
+只卸命令行。不要删 Cursor 编辑器，也不要删 `%USERPROFILE%\.cursor`，登录和编辑器设置都在那里。在 PowerShell 里运行：
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.ExecutablePath -like '*cursor-agent*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\cursor-agent"
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\cursor-compile-cache" -ErrorAction SilentlyContinue
+
+$removed = Join-Path $env:LOCALAPPDATA "cursor-agent"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$filtered = (
+  $userPath -split ';' |
+    Where-Object { $_ -and ($_.TrimEnd('\') -ne $removed.TrimEnd('\')) }
+) -join ';'
+[Environment]::SetEnvironmentVariable("Path", $filtered, "User")
+```
+
+然后新开一个 PowerShell，重新安装并确认：
+
+```powershell
+irm 'https://cursor.com/install?win32=true' | iex
+```
+
+关掉这个窗口，再开一个，运行 `agent --version`。能打出版本号后，在同一个窗口里进入工具目录并运行 `python app.py`。
 
 #### 2. 在星图里选择模式
 
@@ -178,7 +209,7 @@ PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查�
 
 导表规则默认使用 `id`（存在时）。多个 key 按列顺序嵌套，例如 `[key1][key2]`；不选择 key 时导出记录数组。Key 为空、重复或未勾选对应导出端时会报错。前后端若生成相同路径，工具会停止导出并提示冲突。
 
-设置的目录、文件格式和各表 key 规则会自动保存：
+设置的目录（含 UI 配置目录）、文件格式和各表 key 规则会自动保存：
 
 ```text
 %APPDATA%\GameConfigAssistant\settings.json
@@ -193,6 +224,7 @@ PowerShell 里 `agent --version` 也找不到命令时，按官方文档检查�
 - Lua 字典示例：`{id = 1, name = "道具"}` 或 `{["id"] = 1}`。支持嵌套表及 `true`、`false`、`nil`；不会执行 Lua 代码。
 - JSON 导出时 Lua 表会转换为数组或对象。Lua 导出采用多行缩进格式；TSV 单元格内的 Lua 表值保持单行。
 - 字符串字段填写本地 PNG、JPG、JPEG、GIF、WEBP 或 BMP 路径时显示缩略图。相对路径以 TSV 所在目录为基准；点击缩略图可查看或编辑路径。
+- 「导出设置」里的「UI 配置目录」用来显示资源路径图标。目录例如 `D:\code\game_demo_client\assets\resources\ui`，单元格为 `ui/item_icons/speed_up` 时，显示该目录下的 `item_icons\speed_up.png`。扩展名可以省略，末尾的 `/spriteFrame` 会去掉。路径以配置目录名为前缀时会去掉这一段，其余部分在 UI 目录内查找。
 - 导出文件名使用 `<配置表名>.lua` 或 `<配置表名>.json`，前后端通过各自目录区分。未启用对应导出端的列不会写入该端文件。
 - Lua 文件头会标注作者 `liter_wave`、生成工具及来源 TSV 文件名。
 - 导出完成后会显示处理表数量、生成文件数量和每张表的输出路径。

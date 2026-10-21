@@ -9,6 +9,9 @@ from typing import Any
 from schema import DATA_TYPES, EXPORT_TARGETS
 
 
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
 def _display_value(value: Any) -> str:
     if value is None:
         return ""
@@ -17,27 +20,73 @@ def _display_value(value: Any) -> str:
     return str(value)
 
 
-def resolve_image_path(value: Any, table_path: Path | None) -> Path | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    candidate = Path(value.strip())
-    if candidate.suffix.casefold() not in {
-        ".bmp",
-        ".gif",
-        ".jpeg",
-        ".jpg",
-        ".png",
-        ".webp",
-    }:
-        return None
-    if not candidate.is_absolute():
-        base_directory = table_path.parent if table_path is not None else Path.cwd()
-        candidate = base_directory / candidate
+def _existing_image_file(path: Path) -> Path | None:
     try:
-        if candidate.is_file():
-            return candidate.resolve()
+        suffix = path.suffix.casefold()
+        if suffix:
+            if suffix in _IMAGE_SUFFIXES and path.is_file():
+                return path.resolve()
+            return None
+        for image_suffix in _IMAGE_SUFFIXES:
+            candidate = path.with_suffix(image_suffix)
+            if candidate.is_file():
+                return candidate.resolve()
     except (OSError, RuntimeError):
         return None
+    return None
+
+
+def _ui_resource_path(value: str) -> Path:
+    text = value.strip().strip('"').replace("\\", "/").strip("/")
+    resource = Path(text)
+    if resource.name.casefold() == "spriteframe":
+        resource = resource.parent
+    return resource
+
+
+def resolve_image_path(
+    value: Any,
+    table_path: Path | None,
+    ui_directory: str | Path | None = None,
+) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().strip('"')
+    candidate = Path(text)
+    if candidate.suffix.casefold() in _IMAGE_SUFFIXES:
+        if not candidate.is_absolute():
+            base_directory = (
+                table_path.parent if table_path is not None else Path.cwd()
+            )
+            candidate = base_directory / candidate
+        found = _existing_image_file(candidate)
+        if found is not None:
+            return found
+    if not ui_directory:
+        return None
+    root = Path(ui_directory)
+    try:
+        if not root.is_dir():
+            return None
+    except OSError:
+        return None
+    resource = _ui_resource_path(text)
+    if resource.is_absolute() or not resource.parts or resource.parts[0] in {".", ""}:
+        return _existing_image_file(resource)
+    candidates: list[Path] = []
+    if resource.parts[0].casefold() == root.name.casefold():
+        remainder = resource.parts[1:]
+        candidates.append(root.joinpath(*remainder) if remainder else root)
+    candidates.append(root / resource)
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        found = _existing_image_file(path)
+        if found is not None:
+            return found
     return None
 
 

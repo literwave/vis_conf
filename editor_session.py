@@ -83,6 +83,15 @@ class Workspace(
             discovered = config_directory.resolve_current_configuration_directory()
             if config_directory.directory_contains_tsv(discovered):
                 self.configuration_directory = str(discovered)
+        self.ui_directory = saved_settings.get("ui_directory")
+        if not isinstance(self.ui_directory, str) or not self.ui_directory:
+            self.ui_directory = None
+        if (
+            self.ui_directory is not None
+            and not self.mobile_platform
+            and not Path(self.ui_directory).is_dir()
+        ):
+            self.ui_directory = None
         saved_plugin_settings = saved_settings.get("plugin_settings")
         self.plugin_settings = (
             saved_plugin_settings if isinstance(saved_plugin_settings, dict) else {}
@@ -210,6 +219,12 @@ class Workspace(
             label="前端导出目录",
             value=self.export_paths["frontend"] or "尚未选择",
             hint_text="选择目录，或直接粘贴路径",
+            width=410,
+        )
+        self.ui_directory_field = ft.TextField(
+            label="UI 配置目录",
+            value=self.ui_directory or "尚未选择",
+            hint_text=r"例如 D:\code\game_demo_client\assets\resources\ui",
             width=410,
         )
         self.backend_format_select = ft.Dropdown(

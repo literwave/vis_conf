@@ -296,6 +296,23 @@ class EditorFiles:
     async def choose_frontend_export_directory(self, _):
         await self.choose_export_directory("frontend")
 
+    async def choose_ui_directory(self, _):
+        try:
+            directory = await self.picker.get_directory_path(
+                dialog_title="选择 UI 配置目录",
+                initial_directory=self.available_initial_directory(self.ui_directory),
+            )
+        except (OSError, RuntimeError) as exc:
+            self.notify(f"选择 UI 配置目录失败：{exc}", error=True)
+            return
+        if directory is None:
+            return
+        self.ui_directory = directory
+        self.ui_directory_field.value = directory
+        self.save_export_settings()
+        self.refresh_table()
+        self.page.update()
+
     async def choose_configuration_directory(self, _):
         try:
             directory = await self.picker.get_directory_path(

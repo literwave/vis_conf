@@ -243,7 +243,9 @@ class EditorGrid:
             is_selected: bool,
         ) -> ft.Container:
             value = row.get(column)
-            image_path = resolve_image_path(value, self.active_table_path)
+            image_path = resolve_image_path(
+                value, self.active_table_path, getattr(self, "ui_directory", None)
+            )
             cell_content: ft.Control
             if image_path is not None:
                 cell_content = ft.Image(

@@ -17,7 +17,7 @@ from app import (
     prepare_export_files,
 )
 from export_data import checked_export_directory, remove_stale_export_files
-from table_file import parse_data_value
+from table_file import parse_data_value, resolve_image_path
 
 
 class BuildExportArchiveTests(unittest.TestCase):
@@ -221,6 +221,36 @@ class BuildExportArchiveTests(unittest.TestCase):
             self.assertTrue((backend / "notes.txt").is_file())
             self.assertFalse(stale.exists())
             self.assertFalse((frontend / "old_item.json").exists())
+
+
+class ResolveImagePathTests(unittest.TestCase):
+    def test_ui_directory_resolves_icon_path_without_extension(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            ui_directory = Path(temporary_directory) / "resources" / "ui"
+            icon = ui_directory / "item_icons" / "speed_up.png"
+            icon.parent.mkdir(parents=True)
+            icon.write_bytes(b"png")
+
+            self.assertEqual(
+                resolve_image_path(
+                    "ui/item_icons/speed_up", None, ui_directory
+                ),
+                icon.resolve(),
+            )
+            self.assertEqual(
+                resolve_image_path(
+                    "ui/item_icons/speed_up/spriteFrame", None, ui_directory
+                ),
+                icon.resolve(),
+            )
+            self.assertEqual(
+                resolve_image_path("item_icons/speed_up", None, ui_directory),
+                icon.resolve(),
+            )
+            self.assertIsNone(
+                resolve_image_path("ui/item_icons/missing", None, ui_directory)
+            )
+            self.assertIsNone(resolve_image_path(3, None, ui_directory))
 
 
 if __name__ == "__main__":

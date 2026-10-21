@@ -82,6 +82,7 @@ class EditorExport:
         settings = {
             "export_paths": self.export_paths,
             "configuration_directory": self.configuration_directory,
+            "ui_directory": self.ui_directory,
             "backend_format": self.backend_format_select.value or "lua",
             "frontend_format": self.frontend_format_select.value or "json",
             "key_rules": self.key_rules_by_table,
@@ -484,6 +485,26 @@ class EditorExport:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     wrap=True,
                 ),
+                ft.Divider(height=1, color="#EAECF0"),
+                ft.Text("UI", size=13, weight=ft.FontWeight.W_600, color="#344054"),
+                ft.Text(
+                    "用来显示单元格里的图标。目录例如 D:\\code\\game_demo_client\\assets\\resources\\ui，路径写成 ui/item_icons/speed_up。",
+                    size=12,
+                    color="#667085",
+                ),
+                ft.Row(
+                    [
+                        self.ui_directory_field,
+                        ft.OutlinedButton(
+                            "选择目录",
+                            icon=ft.Icons.FOLDER_OPEN,
+                            on_click=self.choose_ui_directory,
+                        ),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    wrap=True,
+                ),
             ]
             form_error = ft.Text("", size=12, color="#D92D20", visible=False)
             settings_controls.append(form_error)
@@ -505,6 +526,9 @@ class EditorExport:
                     frontend = checked_export_directory(
                         "前端导出目录", self.frontend_directory_field.value
                     )
+                    ui_directory = checked_export_directory(
+                        "UI 配置目录", self.ui_directory_field.value
+                    )
                 except ValueError as exc:
                     show_form_error(str(exc))
                     return
@@ -521,9 +545,12 @@ class EditorExport:
                         return
                 self.export_paths["backend"] = backend
                 self.export_paths["frontend"] = frontend
+                self.ui_directory = ui_directory
                 self.backend_directory_field.value = backend or "尚未选择"
                 self.frontend_directory_field.value = frontend or "尚未选择"
+                self.ui_directory_field.value = ui_directory or "尚未选择"
                 self.save_export_settings()
+                self.refresh_table()
                 self.page.pop_dialog()
                 self.page.update()
                 self.notify("导出设置已保存")
@@ -539,7 +566,7 @@ class EditorExport:
                 title=ft.Text("导出设置"),
                 content=ft.Column(
                     settings_controls,
-                    height=self.dialog_height(540, margin=112),
+                    height=self.dialog_height(680, margin=112),
                     width=self.dialog_width(640),
                     spacing=10,
                     scroll=ft.ScrollMode.AUTO,
