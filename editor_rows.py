@@ -51,6 +51,10 @@ class EditorRows:
         path_key = self.table_path_key(self.active_table_path)
         self.modified_table_paths.add(path_key)
         self.table_states[path_key] = self.snapshot_active_table()
+        if not self.mobile_platform:
+            message = self.persist_active_table()
+            if "失败" in message:
+                self.notify(message, error=True)
         self.refresh_configuration_files()
 
     def row_history_key(self) -> str:
@@ -479,7 +483,7 @@ class EditorRows:
                 modal=True,
                 title=ft.Text("删除数据行"),
                 content=ft.Text(
-                    f"确定删除第 {row_number} 行吗？此操作仅影响当前会话中的数据。"
+                    f"确定删除第 {row_number} 行吗？删除会立即写回 TSV，并更新已配置的前后端文件。"
                 ),
                 actions=[
                     ft.TextButton("取消", on_click=lambda _: self.page.pop_dialog()),
