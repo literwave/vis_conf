@@ -44,11 +44,13 @@ class FakePage:
         pass
 
     def show_dialog(self, dialog):
+        dialog.open = True
         self.dialogs.append(dialog)
 
     def pop_dialog(self):
         if self.dialogs:
-            self.dialogs.pop()
+            dialog = self.dialogs.pop()
+            dialog.open = False
 
 
 class FakeDirectoryPicker:
@@ -343,6 +345,60 @@ class MobileLayoutTests(unittest.TestCase):
             )
         )
         self.assertEqual(self._row_ids(page)[:3], ["1001", "1002", "1003"])
+
+    def test_column_name_in_the_first_row_can_be_renamed(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch("app_settings._load_app_settings", return_value=({}, None)), patch(
+                "app_settings._app_settings_path",
+                return_value=Path(temporary_directory) / "settings.json",
+            ):
+                main(page)
+                table_card = page.controls[0].controls[1].content.controls[1].content.controls[1]
+                grid = table_card.content.controls[3].controls[0].controls[0].content.controls[0]
+                name_header = grid.content.controls[0].controls[2]
+                self.assertEqual(name_header.content.value, "name")
+                name_header.on_click(None)
+                dialog = page.dialogs[-1]
+                dialog.content.value = "title"
+                dialog.actions[1].on_click(None)
+                grid = table_card.content.controls[3].controls[0].controls[0].content.controls[0]
+                self.assertEqual(grid.content.controls[0].controls[2].content.value, "title")
+                renamed_cell = self._table_rows(page)[0].content.controls[2].content
+                self.assertEqual(renamed_cell.value, "新手长剑")
+
+                grid.content.controls[0].controls[2].on_click(None)
+                dialog = page.dialogs[-1]
+                dialog.content.value = "id"
+                dialog.actions[1].on_click(None)
+                self.assertEqual(dialog.content.error, "字段名「id」已存在。")
+
+    def test_editing_a_cell_does_not_copy_or_paste_the_row(self):
+        page = FakePage(width=1260)
+        page.platform = ft.PagePlatform.WINDOWS
+        with patch("app_settings._load_app_settings", return_value=({}, None)):
+            main(page)
+            self._table_rows(page)[0].content.controls[0].content.on_click(None)
+            self._table_rows(page)[0].content.controls[2].on_click(None)
+            dialog = page.dialogs[-1]
+            dialog.content.value = "新名称"
+            for key in ("c", "v", "z"):
+                page.on_keyboard_event(
+                    ft.KeyboardEvent(
+                        name="keyboard",
+                        control=page,
+                        key=key,
+                        shift=False,
+                        ctrl=True,
+                        alt=False,
+                        meta=False,
+                    )
+                )
+
+        self.assertEqual(dialog.content.value, "新名称")
+        self.assertEqual(self._row_ids(page)[:3], ["1001", "1002", "1003"])
+        self.assertIs(page.dialogs[-1], dialog)
 
     def test_image_path_cell_renders_thumbnail_and_remains_editable(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -290,6 +290,15 @@ class Workspace(
         self.mobile_configuration_search_field.on_change = (
             lambda _: self.refresh_configuration_files()
         )
+        self.text_entry_focused = False
+
+        def mark_text_entry(focused: bool):
+            self.text_entry_focused = focused
+
+        self.configuration_search_field.on_focus = lambda _: mark_text_entry(True)
+        self.configuration_search_field.on_blur = lambda _: mark_text_entry(False)
+        self.mobile_configuration_search_field.on_focus = lambda _: mark_text_entry(True)
+        self.mobile_configuration_search_field.on_blur = lambda _: mark_text_entry(False)
         self.backend_format_select.on_select = lambda _: self.save_export_settings()
         self.frontend_format_select.on_select = lambda _: self.save_export_settings()
         self.configuration_delete_button = ft.IconButton(

@@ -161,12 +161,16 @@ class EditorGrid:
                 height=42,
                 alignment=ft.Alignment(0, 0),
                 padding=ft.Padding(12, 0, 8, 0),
+                bgcolor="#F8FAFC",
+                tooltip="点击修改字段名",
+                ink=True,
+                on_click=lambda _, index=index: self.edit_column_name(index),
                 border=ft.Border.only(
                     right=ft.BorderSide(1, grid_border),
                     bottom=ft.BorderSide(1, grid_border),
                 ),
             )
-            for name in self.columns
+            for index, name in enumerate(self.columns)
         ]
         data_type_cells = [
             ft.Container(

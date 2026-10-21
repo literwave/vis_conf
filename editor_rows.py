@@ -135,9 +135,25 @@ class EditorRows:
         self.refresh_table()
         self.notify(f"已插入到第 {self.selected_row_index + 1} 行，原行下移")
 
+    def _row_shortcuts_should_wait(self) -> bool:
+        if getattr(self, "text_entry_focused", False):
+            return True
+        dialogs = getattr(self.page, "dialogs", None)
+        if dialogs is None:
+            holder = getattr(self.page, "_dialogs", None)
+            dialogs = getattr(holder, "controls", ())
+        for dialog in dialogs:
+            if isinstance(dialog, ft.SnackBar):
+                continue
+            if getattr(dialog, "open", False):
+                return True
+        return False
+
     def handle_row_shortcuts(self, event: ft.KeyboardEvent):
         handler = getattr(self, "plugin_keyboard_handler", None)
         if callable(handler) and handler(event):
+            return
+        if self._row_shortcuts_should_wait():
             return
         key = event.key.casefold()
         if not (event.ctrl or event.meta) or event.alt or event.shift:
@@ -229,6 +245,57 @@ class EditorRows:
                 actions=[
                     ft.TextButton("取消", on_click=lambda _: self.page.pop_dialog()),
                     ft.Button("保存", on_click=save_value),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+
+    def edit_column_name(self, index: int):
+        current = self.columns[index]
+        name_input = ft.TextField(
+            label="字段名",
+            value=current,
+            autofocus=True,
+            width=self.dialog_width(400),
+        )
+
+        def save_name(_):
+            name = (name_input.value or "").strip()
+            if not name or any(character in name for character in "\t\r\n"):
+                name_input.error = "请输入有效的字段名。"
+                self.page.update()
+                return
+            if name != current and name in self.columns:
+                name_input.error = f"字段名「{name}」已存在。"
+                self.page.update()
+                return
+            if name != current:
+                self.record_row_undo()
+                self.columns[index] = name
+                for row in self.rows:
+                    row[name] = row.pop(current) if current in row else None
+                self.key_columns[:] = [
+                    name if key == current else key for key in self.key_columns
+                ]
+                if (
+                    self.copied_row is not None
+                    and self.copied_row_table_key == self.row_history_key()
+                    and current in self.copied_row
+                ):
+                    self.copied_row[name] = self.copied_row.pop(current)
+                self.mark_active_table_modified()
+                self.save_export_settings()
+            self.page.pop_dialog()
+            self.refresh_table()
+
+        self.show_alert_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(f"编辑字段名「{current}」"),
+                content=name_input,
+                actions=[
+                    ft.TextButton("取消", on_click=lambda _: self.page.pop_dialog()),
+                    ft.Button("保存", on_click=save_name),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
