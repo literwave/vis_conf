@@ -544,9 +544,12 @@ class EditorGrid:
         width = self.page.width if self.page.width and self.page.width > 0 else 1024
         height = self.page.height if self.page.height and self.page.height > 0 else 768
         compact = width < 820
+        # 26 letters at 16px, plus the list frame, so each letter stays easy to hit.
+        preferred_list_height = 26 * 16 + 20
         self.configuration_file_list_container.height = max(
-            96, min(240, int(height - 500))
+            140, min(preferred_list_height, int(height) - 360)
         )
+        self.fit_configuration_letter_index()
         self.sidebar.visible = not compact
         self.mobile_configuration_button.visible = compact
         self.header.padding = (

@@ -13,6 +13,15 @@ import flet as ft
 from app import main
 
 
+def _configuration_file_list(content):
+    if isinstance(content, ft.Row):
+        for child in content.controls:
+            if getattr(child, "expand", None):
+                return child
+        return content.controls[-1]
+    return content
+
+
 @contextmanager
 def _installed_table_agent():
     with tempfile.TemporaryDirectory() as directory:
@@ -119,6 +128,24 @@ class MobileLayoutTests(unittest.TestCase):
         return found
 
     @staticmethod
+    def _control_text(root):
+        values = []
+
+        def walk(control, seen):
+            if control is None or id(control) in seen:
+                return
+            seen.add(id(control))
+            value = getattr(control, "value", None)
+            if isinstance(value, str):
+                values.append(value)
+            for child in getattr(control, "controls", None) or []:
+                walk(child, seen)
+            walk(getattr(control, "content", None), seen)
+
+        walk(root, set())
+        return values
+
+    @staticmethod
     def _open_ai_agent(page):
         MobileLayoutTests._click_labeled(page, "插件")
         dialog = page.dialogs[-1]
@@ -187,7 +214,7 @@ class MobileLayoutTests(unittest.TestCase):
         self.assertIsNone(sidebar_content.scroll)
         configuration_file_list_container = sidebar_content.controls[6]
         bottom_spacer = sidebar_content.controls[7]
-        self.assertEqual(configuration_file_list_container.height, 240)
+        self.assertEqual(configuration_file_list_container.height, 436)
         self.assertTrue(bottom_spacer.expand)
         self.assertEqual(
             sidebar_content.controls[-2].content.controls[1].value,
@@ -208,14 +235,14 @@ class MobileLayoutTests(unittest.TestCase):
         page.width = 1024
         page.on_resize(None)
         self.assertTrue(sidebar.visible)
-        self.assertEqual(configuration_file_list_container.height, 240)
+        self.assertEqual(configuration_file_list_container.height, 436)
         self.assertTrue(bottom_spacer.expand)
         self.assertFalse(metrics_row.wrap)
         self.assertFalse(footer_row.wrap)
 
         page.height = 620
         page.on_resize(None)
-        self.assertEqual(configuration_file_list_container.height, 120)
+        self.assertEqual(configuration_file_list_container.height, 260)
         self.assertTrue(bottom_spacer.expand)
         self.assertEqual(
             sidebar_content.controls[-2].content.controls[1].value,
@@ -419,7 +446,7 @@ class MobileLayoutTests(unittest.TestCase):
                 main(page)
 
                 sidebar = page.controls[0].controls[0]
-                file_list = sidebar.content.controls[6].content
+                file_list = _configuration_file_list(sidebar.content.controls[6].content)
                 test_table_path = configuration_directory / "test_config.tsv"
                 test_table_item = next(
                     control
@@ -509,7 +536,9 @@ class MobileLayoutTests(unittest.TestCase):
                 main(page)
 
             self.assertEqual(page.dialogs, [])
-            file_list = page.controls[0].controls[0].content.controls[6].content
+            file_list = _configuration_file_list(
+                page.controls[0].controls[0].content.controls[6].content
+            )
             self.assertTrue(
                 any(
                     getattr(control, "tooltip", None) == str(current_directory / "Hero.tsv")
@@ -620,7 +649,7 @@ class MobileLayoutTests(unittest.TestCase):
                     if getattr(control, "tooltip", None) == "刷新配置表"
                 )
                 refresh.on_click(None)
-                file_list = sidebar.content.controls[6].content
+                file_list = _configuration_file_list(sidebar.content.controls[6].content)
                 names = [
                     control.content.controls[1].value
                     for control in file_list.controls
@@ -628,6 +657,64 @@ class MobileLayoutTests(unittest.TestCase):
                 ]
 
         self.assertEqual(names, ["hero.tsv", "item.tsv"])
+
+    def test_letter_index_jumps_to_tables_by_initial(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_directory = Path(temporary_directory) / "configs"
+            config_directory.mkdir()
+            for name in ("hero.tsv", "item.tsv", "技能.tsv"):
+                (config_directory / name).write_text(
+                    "id\ninteger\nboth\n编号\n", encoding="utf-8"
+                )
+            page = FakePage(width=1260)
+            page.platform = ft.PagePlatform.WINDOWS
+            with (
+                patch(
+                    "app_settings._load_app_settings",
+                    return_value=(
+                        {"configuration_directory": str(config_directory)},
+                        None,
+                    ),
+                ),
+                patch(
+                    "app_settings._app_settings_path",
+                    return_value=Path(temporary_directory) / "settings.json",
+                ),
+            ):
+                main(page)
+
+            row = page.controls[0].controls[0].content.controls[6].content
+            file_list = _configuration_file_list(row)
+            keyed = {
+                control.key.value: control.content.controls[1].value
+                for control in file_list.controls
+                if getattr(control, "key", None) is not None
+            }
+            self.assertEqual(
+                keyed, {"config-H": "hero.tsv", "config-I": "item.tsv", "config-#": "技能.tsv"}
+            )
+            letter_index = row.controls[0]
+            container = page.controls[0].controls[0].content.controls[6]
+            self.assertIsNone(letter_index.scroll)
+            self.assertGreaterEqual(letter_index.controls[0].height, 15)
+            self.assertGreaterEqual(letter_index.controls[0].content.size, 12)
+            self.assertIsNone(getattr(letter_index.controls[0], "tooltip", None))
+            self.assertLessEqual(
+                sum(letter.height for letter in letter_index.controls),
+                container.height - 16,
+            )
+            self.assertEqual(
+                [letter.content.value for letter in letter_index.controls[:3]],
+                ["A", "B", "C"],
+            )
+            colors = {
+                letter.content.value: letter.content.color
+                for letter in letter_index.controls
+            }
+            self.assertEqual(colors["H"], "#5B6CFF")
+            self.assertEqual(colors["A"], "#D0D5DD")
+            self.assertEqual(colors["#"], "#5B6CFF")
+            letter_index.controls[0].on_click(None)
 
     def test_resolve_current_directory_prefers_nearby_tsv_folder(self):
         from app import resolve_current_configuration_directory
@@ -681,7 +768,9 @@ class MobileLayoutTests(unittest.TestCase):
                 main(page)
 
             self.assertFalse(settings_path.exists())
-            file_list = page.controls[0].controls[0].content.controls[6].content
+            file_list = _configuration_file_list(
+                page.controls[0].controls[0].content.controls[6].content
+            )
             self.assertTrue(
                 any(
                     getattr(control, "tooltip", None) == str(table_directory / "Hero.tsv")
@@ -732,7 +821,9 @@ class MobileLayoutTests(unittest.TestCase):
                 patch('ai_agent.run_cursor_workspace', new=run_agent),
             ):
                 main(page)
-                file_list = page.controls[0].controls[0].content.controls[6].content
+                file_list = _configuration_file_list(
+                    page.controls[0].controls[0].content.controls[6].content
+                )
                 next(
                     control
                     for control in file_list.controls
@@ -773,6 +864,12 @@ class MobileLayoutTests(unittest.TestCase):
             asyncio.run(send_button.on_click(None))
             self.assertEqual(dialog.content.controls[1].controls[1].value, '这张表有一件武器。')
             self.assertFalse(any(getattr(action, 'content', None) == '应用到当前表' for action in dialog.actions))
+            hide = next(action for action in dialog.actions if getattr(action, 'content', None) == '隐藏')
+            hide.on_click(None)
+            self.assertNotIn(dialog, page.dialogs)
+            self._open_ai_agent(page)
+            reopened = page.dialogs[-1]
+            self.assertIn('这张表有一件武器。', self._control_text(reopened.content.controls[1]))
 
     def test_agent_keeps_separate_conversations(self):
         page = FakePage(width=1260)

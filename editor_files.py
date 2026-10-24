@@ -6,6 +6,28 @@ import os
 from table_file import load_table, new_configuration_table_bytes
 
 
+def _configuration_letter(filename: str) -> str:
+    stem = Path(filename).stem
+    first = stem[:1]
+    if first.isascii() and first.isalpha():
+        return first.upper()
+    return "#"
+
+
+def _name_matches(filename: str, query: str) -> bool:
+    query = query.strip().casefold()
+    if not query:
+        return True
+    candidate = filename.casefold()
+    query_index = 0
+    for character in candidate:
+        if character == query[query_index]:
+            query_index += 1
+            if query_index == len(query):
+                return True
+    return False
+
+
 class EditorFiles:
     def count_configuration_tables(self, directory: str) -> int:
         return sum(
@@ -35,7 +57,11 @@ class EditorFiles:
         )
 
     def make_configuration_file_controls(
-        self, tables: list[Path], query: str, close_dialog_on_select: bool = False
+        self,
+        tables: list[Path],
+        query: str,
+        close_dialog_on_select: bool = False,
+        letter_keys: bool = False,
     ) -> list[ft.Control]:
         query = query.strip().casefold()
 
@@ -69,8 +95,17 @@ class EditorFiles:
             if close_dialog_on_select:
                 self.page.pop_dialog()
 
-        return [
-            ft.Container(
+        controls = []
+        seen_letters: set[str] = set()
+        for path in tables:
+            letter = _configuration_letter(path.name)
+            scroll_key = None
+            if letter_keys and letter not in seen_letters:
+                seen_letters.add(letter)
+                scroll_key = ft.ScrollKey(f"config-{letter}")
+            controls.append(
+                ft.Container(
+                key=scroll_key,
                 content=ft.Row(
                     [
                         ft.Icon(
@@ -117,15 +152,92 @@ class EditorFiles:
                 ink_color="#EEF0FF",
                 on_click=lambda _, selected_path=path: select_table(selected_path),
                 tooltip=path.name if self.mobile_platform else str(path),
+                )
             )
+        return controls
+
+    def refresh_configuration_letter_index(self, tables: list[Path], query: str) -> None:
+        index = getattr(self, "configuration_letter_index", None)
+        if index is None:
+            return
+        present = {
+            _configuration_letter(path.name)
             for path in tables
+            if _name_matches(path.name, query)
+        }
+        letters = [chr(code) for code in range(ord("A"), ord("Z") + 1)]
+        if "#" in present:
+            letters.append("#")
+
+        def jump(letter: str):
+            order = letters
+            target = letter if letter in present else None
+            if target is None and letter in order:
+                start = order.index(letter)
+                later = [item for item in order[start + 1 :] if item in present]
+                earlier = [item for item in order[:start] if item in present]
+                target = later[0] if later else (earlier[-1] if earlier else None)
+            if target is None:
+                return
+            self._scroll_configuration_list_to(target)
+
+        slot, font_size = self._letter_index_metrics(len(letters))
+        index.controls = [
+            ft.Container(
+                content=ft.Text(
+                    letter,
+                    size=font_size,
+                    color="#5B6CFF" if letter in present else "#D0D5DD",
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                width=22,
+                height=slot,
+                alignment=ft.Alignment(0, 0),
+                on_click=lambda _, selected=letter: jump(selected),
+            )
+            for letter in letters
         ]
+
+    def _letter_index_metrics(self, count: int) -> tuple[int, int]:
+        container = getattr(self, "configuration_file_list_container", None)
+        outer = getattr(container, "height", None) or 436
+        inner = max(count, int(outer) - 16)
+        slot = max(1, inner // max(count, 1))
+        return slot, min(13, max(10, slot - 3))
+
+    def fit_configuration_letter_index(self) -> None:
+        index = getattr(self, "configuration_letter_index", None)
+        if index is None or not index.controls:
+            return
+        slot, font_size = self._letter_index_metrics(len(index.controls))
+        for letter in index.controls:
+            letter.height = slot
+            text = letter.content
+            if isinstance(text, ft.Text):
+                text.size = font_size
+
+    def _scroll_configuration_list_to(self, letter: str) -> None:
+        async def go():
+            try:
+                await self.configuration_file_list.scroll_to(
+                    scroll_key=f"config-{letter}", duration=150
+                )
+            except Exception:
+                return
+
+        run_task = getattr(self.page, "run_task", None)
+        if callable(run_task):
+            run_task(go)
+            return
+        go().close()
 
     def refresh_configuration_files(self):
         tables = self.configuration_paths()
+        query = self.configuration_search_field.value or ""
         self.configuration_file_list.controls = self.make_configuration_file_controls(
-            tables, self.configuration_search_field.value or ""
+            tables, query, letter_keys=True
         )
+        self.refresh_configuration_letter_index(tables, query)
         self.mobile_configuration_file_list.controls = (
             self.make_configuration_file_controls(
                 tables,

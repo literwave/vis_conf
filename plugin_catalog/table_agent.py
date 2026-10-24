@@ -59,8 +59,10 @@ def load_conversations(saved: object, active_id: object) -> tuple[list[dict], st
 
 
 def register(ctx: PluginContext) -> list[PluginAction]:
-    def open_agent(_event) -> None:
-        _AgentPanel(ctx).open()
+    panel = _AgentPanel(ctx)
+
+    def open_agent(_event):
+        return panel.open()
 
     return [
         PluginAction(
@@ -91,6 +93,9 @@ class _AgentPanel:
             "deepseek": _saved_text(ctx, "deepseek_model") or ai_agent.API_PROVIDERS["deepseek"]["default_model"],
         }
         self.messages = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        self.running = False
+        self.hidden = False
+        self.dialog = None
         self.prompt = ft.TextField(
             hint_text="直接描述要做的事。Enter 发送，Shift+Enter 换行",
             multiline=True,
@@ -118,9 +123,39 @@ class _AgentPanel:
         profile = ai_agent.API_PROVIDERS[self.provider]
         return f"{profile['label']} {mode_name} · {self.models[self.provider]}"
 
-    def open(self) -> None:
+    def _detach(self, control) -> None:
+        parent = getattr(control, "parent", None)
+        controls = getattr(parent, "controls", None)
+        if isinstance(controls, list) and control in controls:
+            controls.remove(control)
+
+    async def _scroll_messages_to_latest(self) -> None:
+        try:
+            await self.messages.scroll_to(offset=-1, duration=0)
+        except Exception:
+            return
+
+    def hide(self, _=None) -> None:
+        self.hidden = True
+        self.ctx.pop_dialog()
+        if self.running:
+            self.ctx.notify("对话已收起，Agent 会在后台继续运行。")
+
+    async def open(self) -> None:
+        self.hidden = False
+        for control in (
+            self.messages,
+            self.prompt,
+            self.send_button,
+            self.mode_text,
+            self.conversation_select,
+        ):
+            self._detach(control)
+        if not self.running:
+            self._show_saved_messages()
+        self.mode_text.value = self._mode_label()
         directory = self.ctx.configuration_directory() or "尚未选择配置目录"
-        dialog = ft.AlertDialog(
+        self.dialog = ft.AlertDialog(
             modal=True,
             scrollable=False,
             title=ft.Row(
@@ -164,12 +199,17 @@ class _AgentPanel:
                 spacing=10,
             ),
             actions=[
-                ft.TextButton("完成", on_click=lambda _: self.ctx.pop_dialog())
+                ft.TextButton(
+                    "隐藏",
+                    tooltip="收起窗口，Agent 继续在后台运行",
+                    on_click=self.hide,
+                ),
+                ft.TextButton("完成", on_click=self.hide),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        self._show_saved_messages()
-        self.ctx.show_dialog(dialog)
+        self.ctx.show_dialog(self.dialog, self.hide)
+        await self._scroll_messages_to_latest()
 
     def _active(self) -> dict:
         for item in self.conversations:
@@ -243,7 +283,23 @@ class _AgentPanel:
         self.history = [dict(item) for item in self._active()["messages"]]
         self._show_saved_messages()
         self._persist_conversations()
+        self._schedule_scroll()
         self.ctx.update()
+
+    def _schedule_scroll(self) -> None:
+        try:
+            page = self.messages.page
+        except RuntimeError:
+            page = None
+        run_task = getattr(page, "run_task", None)
+
+        async def go():
+            await self._scroll_messages_to_latest()
+
+        if callable(run_task):
+            run_task(go)
+            return
+        go().close()
 
     def _switch_conversation(self, event) -> None:
         if self.send_button.disabled:
@@ -260,6 +316,7 @@ class _AgentPanel:
         self.history = [dict(item) for item in self._active()["messages"]]
         self._show_saved_messages()
         self._persist_conversations()
+        self._schedule_scroll()
         self.ctx.update()
 
     def open_settings(self, _) -> None:
@@ -372,11 +429,13 @@ class _AgentPanel:
             return
         self.prompt.value = ""
         self.send_button.disabled = True
+        self.running = True
         self._add_message("你", prompt, "#EEF0FF")
         service = "Cursor" if self.provider == "cursor" else ai_agent.API_PROVIDERS[self.provider]["label"]
         working = ft.Text(f"{service} 正在配置目录里工作…", size=12, color="#667085")
         self.messages.controls.append(working)
         self.ctx.update()
+        await self._scroll_messages_to_latest()
         try:
             if self.provider == "cursor":
                 reply = await ai_agent.run_cursor_workspace(
@@ -401,8 +460,12 @@ class _AgentPanel:
         except (RuntimeError, ValueError, OSError) as exc:
             working.value = f"请求失败：{exc}"
             working.color = "#D92D20"
+            self.running = False
             self.send_button.disabled = False
             self.ctx.update()
+            await self._scroll_messages_to_latest()
+            if self.hidden:
+                self.ctx.notify(f"Agent 请求失败：{exc}", error=True)
             return
         working.value = reply
         self.history.extend(
@@ -416,5 +479,9 @@ class _AgentPanel:
             self.messages.controls.append(
                 ft.Text("已重新读取当前配置表。", size=12, color="#067647")
             )
+        self.running = False
         self.send_button.disabled = False
         self.ctx.update()
+        await self._scroll_messages_to_latest()
+        if self.hidden:
+            self.ctx.notify("Agent 已完成，打开对话可以看最新内容。")

@@ -189,6 +189,12 @@ class Workspace(
             [ft.Text("请先在导出设置中选择 TSV 目录。", size=11, color="#98A2B3")],
             spacing=4,
             scroll=ft.ScrollMode.AUTO,
+            expand=True,
+        )
+        self.configuration_letter_index = ft.Column(
+            spacing=0,
+            width=22,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
         self.mobile_configuration_search_field = ft.TextField(
             hint_text="搜索配置表…",
@@ -324,14 +330,21 @@ class Workspace(
             disabled=self.active_table_path is None,
         )
         self.configuration_file_list_container = ft.Container(
-            content=self.configuration_file_list,
+            content=ft.Row(
+                [
+                    self.configuration_letter_index,
+                    self.configuration_file_list,
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            ),
             height=240,
             border=ft.Border.all(1, "#EAECF0"),
             border_radius=9,
             padding=6,
         )
         self.sidebar = ft.Container(
-            width=226,
+            width=256,
             bgcolor="#FFFFFF",
             padding=ft.Padding(18, 24, 18, 20),
             content=ft.Column(
