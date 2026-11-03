@@ -142,10 +142,16 @@ def _control_labels(control, seen=None):
 def _tools_tree(root: Path) -> Path:
     tools = root / "ptotools"
     (tools / "script").mkdir(parents=True)
-    (tools / "proto" / "proto_desc").mkdir(parents=True)
     (tools / "script" / "extractlua.py").write_text("# lua\n", encoding="utf-8")
     (tools / "script" / "extractluapb.py").write_text("# pb\n", encoding="utf-8")
     return tools
+
+
+def _proto_dir(tools: Path) -> Path:
+    proto = tools.parent / "proto"
+    proto.mkdir()
+    (proto / "login.proto").write_text('syntax = "proto3";\n', encoding="utf-8")
+    return proto
 
 
 class PluginHostTests(unittest.TestCase):
@@ -214,7 +220,7 @@ class ProtocolPluginTests(unittest.TestCase):
             self.assertTrue(os.path.samefile(find_protocol_tools([root / "tsv"]), tools))
             self.assertTrue(
                 os.path.samefile(
-                    find_protocol_tools([tools / "proto" / "proto_desc"]),
+                    find_protocol_tools([tools / "script"]),
                     tools,
                 )
             )
@@ -222,22 +228,22 @@ class ProtocolPluginTests(unittest.TestCase):
             self.assertIsNone(find_protocol_tools([other_directory]))
         with tempfile.TemporaryDirectory() as temporary_directory:
             tools = _tools_tree(Path(temporary_directory))
-            shutil.rmtree(tools / "proto")
             self.assertTrue(os.path.samefile(find_protocol_tools([tools]), tools))
 
     def test_export_runs_existing_scripts_from_the_tools_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             tools = _tools_tree(Path(temporary_directory))
+            proto = _proto_dir(tools)
             completed = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="copied\n", stderr=""
             )
             with patch(
                 "plugin_catalog.protocol_export.subprocess.run", return_value=completed
             ) as run:
-                ok, message = run_protocol_export(tools)
+                result = run_protocol_export(tools)
 
-        self.assertTrue(ok)
-        self.assertIn("协议已导出", message)
+        self.assertTrue(result.ok)
+        self.assertIn("协议已导出", result.status)
         self.assertEqual(run.call_count, 2)
         first = run.call_args_list[0]
         self.assertEqual(first.kwargs["cwd"], tools)
@@ -245,11 +251,12 @@ class ProtocolPluginTests(unittest.TestCase):
             first.args[0][1],
             str(tools / "script" / "extractlua.py"),
         )
-        self.assertEqual(first.args[0][2], str(tools / "proto" / "proto_desc"))
+        self.assertEqual(first.args[0][2], str(proto))
 
     def test_export_stops_when_protoc_reports_failure(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             tools = _tools_tree(Path(temporary_directory))
+            _proto_dir(tools)
             completed = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -259,15 +266,15 @@ class ProtocolPluginTests(unittest.TestCase):
             with patch(
                 "plugin_catalog.protocol_export.subprocess.run", return_value=completed
             ) as run:
-                ok, message = run_protocol_export(tools)
+                result = run_protocol_export(tools)
 
-        self.assertFalse(ok)
-        self.assertIn("Failed to generate", message)
+        self.assertFalse(result.ok)
+        self.assertIn("Failed to generate", result.status)
         self.assertEqual(run.call_count, 1)
 
     def test_export_status_keeps_the_summary_and_drops_the_script_log(self):
-        message = "协议已导出。\npb：D:/pb\nC#：D:/outcs\n\n--- extractlua.py（退出码 0）---\nCopied login.proto\n"
-        self.assertEqual(_export_status(True, message), "协议已导出。 pb：D:/pb C#：D:/outcs")
+        message = "协议已导出。\npb：D:/pb\n\n--- extractlua.py（退出码 0）---\nCopied login.proto\n"
+        self.assertEqual(_export_status(True, message), "协议已导出。 pb：D:/pb")
         self.assertEqual(_export_status(False, ""), "协议导出失败。")
 
     def test_export_copies_generated_pb_into_the_configured_directory(self):
@@ -277,7 +284,7 @@ class ProtocolPluginTests(unittest.TestCase):
             source = root / "proto"
             source.mkdir()
             (source / "login.proto").write_text('syntax = "proto3";\n', encoding="utf-8")
-            generated = root / "server" / "proto" / "pb"
+            generated = root / "pb"
             generated.mkdir(parents=True)
             (generated / "login.pb").write_bytes(b"pb-bytes")
             pb_dir = root / "custom_pb"
@@ -287,19 +294,18 @@ class ProtocolPluginTests(unittest.TestCase):
             with patch(
                 "plugin_catalog.protocol_export.subprocess.run", return_value=completed
             ) as run:
-                ok, message = run_protocol_export(tools, source, pb_dir)
+                result = run_protocol_export(tools, source, pb_dir)
 
-            self.assertTrue(ok)
-            self.assertIn(str(pb_dir), message)
+            self.assertTrue(result.ok)
+            self.assertIn("协议已导出", result.status)
+            self.assertIn(("pb", pb_dir / "login.pb"), result.files)
             self.assertEqual((pb_dir / "login.pb").read_bytes(), b"pb-bytes")
             self.assertEqual(
-                (tools / "proto" / "proto_desc" / "login.proto").read_text(encoding="utf-8"),
+                (source / "login.proto").read_text(encoding="utf-8"),
                 'syntax = "proto3";\n',
             )
-            self.assertEqual(
-                run.call_args_list[0].args[0][2],
-                str(tools / "proto" / "proto_desc"),
-            )
+            self.assertFalse((tools / "proto").exists())
+            self.assertEqual(run.call_args_list[0].args[0][2], str(source))
 
     def test_saved_directories_override_the_detected_proto_folder(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -314,7 +320,7 @@ class ProtocolPluginTests(unittest.TestCase):
             self.assertEqual(resolve_pb_directory(tools, str(pb_dir)), pb_dir)
             self.assertEqual(
                 resolve_pb_directory(tools, None),
-                tools.parent / "server" / "proto" / "pb",
+                tools.parent / "pb",
             )
 
     def test_directory_settings_open_from_the_gear(self):

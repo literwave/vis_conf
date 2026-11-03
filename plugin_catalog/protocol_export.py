@@ -1,4 +1,4 @@
-"""编辑 proto 协议和字段，并导出 pb、C# 和 net_pb。"""
+"""编辑 proto 协议和字段，并导出 pb 和 net_pb。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import flet as ft
 from plugin_host import PluginAction, PluginContext
 
 PLUGIN_TITLE = "协议"
-PLUGIN_DESCRIPTION = "编辑 proto 协议和字段，并导出 pb、C# 和 net_pb。"
+PLUGIN_DESCRIPTION = "编辑 proto 协议和字段，并导出 pb 和 net_pb。"
 
 SCALAR_TYPES = (
     "int32",
@@ -128,18 +128,10 @@ def find_protocol_tools(starts: list[Path | str | None]) -> Path | None:
 
 
 def find_proto_directory(tools_dir: Path) -> Path | None:
-    candidates = [
-        tools_dir / "proto" / "proto_desc",
-        tools_dir.parent / "proto",
-    ]
-    for candidate in candidates:
-        if candidate.is_dir() and any(candidate.glob("*.proto")):
-            return candidate
+    candidate = tools_dir.parent / "proto"
+    if candidate.is_dir() and any(candidate.glob("*.proto")):
+        return candidate
     return None
-
-
-def protocol_desc_directory(tools_dir: Path) -> Path:
-    return tools_dir / "proto" / "proto_desc"
 
 
 def default_pb_directory(tools_dir: Path) -> Path:
@@ -534,31 +526,48 @@ def validate_document(
     return errors
 
 
+@dataclass(frozen=True)
+class ProtocolExportResult:
+    ok: bool
+    status: str
+    files: tuple[tuple[str, Path], ...] = ()
+
+
+def _protocol_count(output: str) -> int:
+    match = re.search(r"\((\d+) protocols\)", output)
+    if match is None:
+        return 0
+    return int(match.group(1))
+
+
+def _failure_line(script_name: str, output: str) -> str:
+    for line in output.splitlines():
+        text = line.strip().strip('"')
+        if text.startswith("Failed to generate"):
+            return text
+    return f"{script_name} 执行失败。"
+
+
 def run_protocol_export(
     tools_dir: Path, proto_dir: Path | None = None, pb_dir: Path | None = None
-) -> tuple[bool, str]:
-    desc = protocol_desc_directory(tools_dir)
-    source = proto_dir or desc
-    if not _same_directory(source, desc):
-        desc.mkdir(parents=True, exist_ok=True)
-        for path in source.glob("*.proto"):
-            shutil.copyfile(path, desc / path.name)
+) -> ProtocolExportResult:
+    source = proto_dir or find_proto_directory(tools_dir)
     scripts = [
         tools_dir / "script" / "extractlua.py",
         tools_dir / "script" / "extractluapb.py",
     ]
     missing = [script.name for script in scripts if not script.is_file()]
-    if missing or not desc.is_dir():
-        missing_text = "、".join(missing or ["proto/proto_desc"])
-        return False, f"协议目录不完整，缺少 {missing_text}。"
+    if missing or source is None or not source.is_dir():
+        missing_text = "、".join(missing or ["proto"])
+        return ProtocolExportResult(False, f"协议目录不完整，缺少 {missing_text}。")
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
-    chunks: list[str] = []
+    protocol_count = 0
     for script in scripts:
         try:
             completed = subprocess.run(
-                [sys.executable, str(script), str(desc)],
+                [sys.executable, str(script), str(source)],
                 cwd=tools_dir,
                 capture_output=True,
                 text=True,
@@ -569,31 +578,33 @@ def run_protocol_export(
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            chunks.append(f"{script.name} 无法执行：{exc}")
-            return False, _limit("\n\n".join(chunks))
+            return ProtocolExportResult(False, f"{script.name} 无法执行：{exc}")
         output = "\n".join(
             part.strip() for part in (completed.stdout, completed.stderr) if part
         )
-        chunks.append(f"--- {script.name}（退出码 {completed.returncode}）---\n{output}")
+        protocol_count = _protocol_count(output) or protocol_count
         if completed.returncode != 0 or "Failed to generate" in output:
-            return False, _limit("\n\n".join(chunks))
+            return ProtocolExportResult(False, _failure_line(script.name, output))
 
     generated_pb = default_pb_directory(tools_dir)
     destination = pb_dir or generated_pb
-    copied = _copy_pb_files(generated_pb, destination)
-    client_net_pb = tools_dir.parent / "client" / "net_pb.json"
-    server_net_pb = tools_dir.parent / "server" / "net_pb.lua"
-    summary = "\n".join(
-        [
-            "协议已导出。",
-            f"pb：{destination}" + (f"（{copied} 个文件）" if copied else ""),
-            f"C#：{tools_dir / 'proto' / 'outcs'}",
-            f"客户端 net_pb：{client_net_pb}",
-            f"后端 net_pb：{server_net_pb}",
-            "",
-        ]
+    _copy_pb_files(generated_pb, destination)
+    pb_root = destination if destination.is_dir() else generated_pb
+    pb_files = tuple(
+        sorted(pb_root.glob("*.pb"), key=lambda path: path.name.casefold())
     )
-    return True, _limit(summary + "\n\n".join(chunks))
+    files = (
+        ("客户端", tools_dir.parent / "client" / "net_pb.json"),
+        ("服务端", tools_dir.parent / "server" / "net_pb.lua"),
+        *(("pb", path) for path in pb_files),
+    )
+    if protocol_count:
+        status = f"协议已导出。共 {protocol_count} 个协议，{len(pb_files)} 个 pb 文件。"
+    elif pb_files:
+        status = f"协议已导出。{len(pb_files)} 个 pb 文件。"
+    else:
+        status = "协议已导出。"
+    return ProtocolExportResult(True, status, files)
 
 
 def _copy_pb_files(generated: Path, destination: Path) -> int:
@@ -607,10 +618,84 @@ def _copy_pb_files(generated: Path, destination: Path) -> int:
     return count
 
 
-def _limit(text: str) -> str:
-    if len(text) <= 12000:
-        return text
-    return text[:2000] + "\n...\n" + text[-9000:]
+def _kind_colors(kind: str) -> tuple[str, str]:
+    if kind == "服务端":
+        return "#EFF8FF", "#175CD3"
+    if kind == "客户端":
+        return "#FFF7ED", "#C2410C"
+    return "#F4F3FF", "#5925DC"
+
+
+def show_protocol_export_dialog(ctx: PluginContext, result: ProtocolExportResult) -> None:
+    close = ft.TextButton("关闭", on_click=lambda _: ctx.pop_dialog())
+    if not result.ok:
+        ctx.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text("协议导出失败"),
+                content=ft.Text(result.status, size=13, color="#B42318"),
+                actions=[close],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+        )
+        return
+    rows = []
+    for kind, path in result.files:
+        background, color = _kind_colors(kind)
+        rows.append(
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Container(
+                            content=ft.Text(
+                                kind,
+                                size=10,
+                                color=color,
+                                weight=ft.FontWeight.W_600,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            width=52,
+                            bgcolor=background,
+                            border_radius=4,
+                            padding=ft.Padding(0, 2, 0, 2),
+                            alignment=ft.Alignment(0, 0),
+                        ),
+                        ft.Text(
+                            path.name,
+                            size=12,
+                            color="#344054",
+                            tooltip=str(path),
+                        ),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=ft.Padding(12, 8, 12, 8),
+                border=ft.Border.only(bottom=ft.BorderSide(1, "#EAECF0")),
+            )
+        )
+    ctx.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text("协议导出完成"),
+            content=ft.Column(
+                [
+                    ft.Text(result.status, size=12, color="#475467"),
+                    ft.Container(
+                        content=ft.Column(rows, spacing=0, scroll=ft.ScrollMode.AUTO),
+                        width=ctx.dialog_width(420),
+                        height=min(460, max(120, len(rows) * 40)),
+                        border=ft.Border.all(1, "#EAECF0"),
+                        border_radius=8,
+                    ),
+                ],
+                tight=True,
+                spacing=12,
+            ),
+            actions=[ft.TextButton("完成", on_click=lambda _: ctx.pop_dialog())],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+    )
 
 
 def _export_status(ok: bool, message: str) -> str:
@@ -825,7 +910,7 @@ class ProtocolEditor:
                     content=ft.Column(
                         [
                             ft.Text(
-                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 pb。C# 仍写到脚本原来的位置。协议号写到 client/net_pb.json 和 server/net_pb.lua。",
+                                "proto导入目录是正在编辑的 .proto。pb导出目录是生成的 .pb 文件位置，默认是仓库的 pb。协议号写到 client/net_pb.json 和 server/net_pb.lua。",
                                 size=12,
                                 color="#667085",
                             ),
@@ -1952,13 +2037,13 @@ class ProtocolEditor:
             return
         self._set_status("正在导出协议…", "#667085")
         self.ctx.update()
-        ok, message = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             run_protocol_export, self.tools_dir, self.proto_dir, self.pb_dir
         )
-        self._set_status(_export_status(ok, message), "#027A48" if ok else "#B42318")
+        self._set_status(result.status, "#027A48" if result.ok else "#B42318")
         self.ctx.update()
-        self.ctx.notify(self.status.value, error=not ok)
-        self.ctx.show_text("协议导出完成" if ok else "协议导出失败", message)
+        self.ctx.notify(self.status.value, error=not result.ok)
+        show_protocol_export_dialog(self.ctx, result)
 
 
 def register(ctx: PluginContext) -> list[PluginAction]:
