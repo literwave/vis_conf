@@ -125,6 +125,16 @@ def server_enum_directory(backend_directory: str) -> Path:
     return Path(backend_directory).parent / "enum"
 
 
+def enum_export_stem(stem: str) -> str:
+    """带 Enum 列的表，导出文件名加 Enum，例如 RankTypeEnum。"""
+    return f"{stem}Enum"
+
+
+def server_enum_filename(stem: str) -> str:
+    """枚举文件名加 Enum，和同名配置表区分，例如 RankTypeEnum.lua。"""
+    return f"{enum_export_stem(stem)}.lua"
+
+
 def _archive_name(path: Path) -> str:
     parent = path.parent
     if parent.name == "enum":
@@ -408,7 +418,8 @@ def prepare_export_files(
         selected_rows = [
             {column: row.get(column, "") for column in selected_columns} for row in rows
         ]
-        frontend_path = Path(frontend_directory) / f"{stem}.{frontend_format}"
+        frontend_stem = enum_export_stem(stem) if "Enum" in enum_columns else stem
+        frontend_path = Path(frontend_directory) / f"{frontend_stem}.{frontend_format}"
         frontend_data = (
             export_lua(
                 selected_columns,
@@ -424,7 +435,7 @@ def prepare_export_files(
         )
         outputs.append((frontend_path, frontend_data))
     if "Enum" in enum_columns:
-        server_enum_path = server_enum_directory(backend_directory) / f"{stem}.lua"
+        server_enum_path = server_enum_directory(backend_directory) / server_enum_filename(stem)
         if validate_directories:
             server_enum_path.parent.mkdir(parents=True, exist_ok=True)
         outputs.append(
