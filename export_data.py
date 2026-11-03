@@ -3,10 +3,135 @@ import io
 import json
 import math
 import os
+import re
 import zipfile
 from typing import Any
 from schema import EXPORT_TARGETS
 from table_file import _lua_value_pretty, parse_data_value
+
+
+KEY_RULES_FILENAME = "key_rules.json"
+
+
+def resolve_key_columns(
+    columns: list[str], saved_keys: list[str] | None
+) -> list[str]:
+    """Pick export keys. A missing rule defaults to the id column, matching Id or id."""
+    by_name = {}
+    for column in columns:
+        by_name.setdefault(column.casefold(), column)
+    if saved_keys is None:
+        id_column = by_name.get("id")
+        return [id_column] if id_column else []
+    resolved = []
+    for key in saved_keys:
+        if not isinstance(key, str):
+            continue
+        actual = by_name.get(key.casefold())
+        if actual and actual not in resolved:
+            resolved.append(actual)
+    return resolved
+
+
+def load_directory_key_rules(directory: str | None) -> dict[str, list[str]]:
+    if not directory:
+        return {}
+    path = Path(directory) / KEY_RULES_FILENAME
+    if not path.is_file():
+        return {}
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    rules = {}
+    for name, keys in saved.items():
+        if isinstance(name, str) and isinstance(keys, list):
+            rules[name] = [key for key in keys if isinstance(key, str)]
+    return rules
+
+
+def store_directory_key_rules(directory: str | None, rules: dict[str, list[str]]) -> None:
+    if not directory:
+        return
+    root = Path(directory)
+    path = root / KEY_RULES_FILENAME
+    if not path.is_file():
+        return
+    table_names = {item.name for item in root.glob("*.tsv")}
+    stored = {
+        name: list(rules.get(name, []))
+        for name in sorted(table_names)
+        if name in rules
+    }
+    path.write_text(
+        json.dumps(stored, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _significant_lua(data: bytes) -> str:
+    text = data.decode("utf-8")
+    output: list[str] = []
+    in_string = False
+    index = 0
+    while index < len(text):
+        character = text[index]
+        if in_string:
+            output.append(character)
+            if character == "\\":
+                index += 1
+                if index < len(text):
+                    output.append(text[index])
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+            output.append(character)
+        elif not character.isspace():
+            output.append(character)
+        index += 1
+    return "".join(output)
+
+
+def export_content_changed(path: Path, data: bytes) -> bool:
+    """True when the new export changes values. Indent and a final newline do not count."""
+    try:
+        current = path.read_bytes()
+    except OSError:
+        return True
+    if current == data:
+        return False
+    suffix = path.suffix.casefold()
+    try:
+        if suffix == ".json":
+            return json.loads(current) != json.loads(data)
+        if suffix == ".lua":
+            return _significant_lua(current) != _significant_lua(data)
+    except (UnicodeError, json.JSONDecodeError, ValueError):
+        return True
+    return True
+
+
+_ENUM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _only_id_columns(columns: list[str]) -> bool:
+    return len(columns) == 1 and columns[0].casefold() == "id"
+
+
+def server_enum_directory(backend_directory: str) -> Path:
+    """后端目录是 server/res 时，枚举写到旁边的 server/enum。"""
+    return Path(backend_directory).parent / "enum"
+
+
+def _archive_name(path: Path) -> str:
+    parent = path.parent
+    if parent.name == "enum":
+        return f"enum/{path.name}"
+    if parent.name not in {"backend", "frontend"}:
+        raise ValueError(f"无效的导出端目录：{parent.name}")
+    return f"{parent.name}/{path.name}"
 
 
 def build_export_archive(outputs: list[tuple[Path, bytes]]) -> bytes:
@@ -16,15 +141,66 @@ def build_export_archive(outputs: list[tuple[Path, bytes]]) -> bytes:
         archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
         for path, data in outputs:
-            target = path.parent.name
-            if target not in {"backend", "frontend"}:
-                raise ValueError(f"无效的导出端目录：{target}")
-            archive_name = f"{target}/{path.name}"
+            archive_name = _archive_name(path)
             if archive_name in seen_names:
                 raise ValueError(f"ZIP 中存在重复文件：{archive_name}")
             seen_names.add(archive_name)
             archive.writestr(archive_name, data)
     return archive_buffer.getvalue()
+
+
+def _enum_entries(
+    source_name: str,
+    columns: list[str],
+    data_types: list[str],
+    rows: list[dict[str, Any]],
+) -> tuple[str, list[tuple[str, int]]]:
+    if "Enum" not in columns:
+        raise ValueError("导出枚举需要 Enum 字段。")
+    id_column = next((column for column in columns if column.casefold() == "id"), None)
+    if id_column is None:
+        raise ValueError("导出枚举需要 Id 字段。")
+    enum_name = Path(source_name).stem
+    if _ENUM_NAME.fullmatch(enum_name) is None:
+        raise ValueError(f"配置表名「{enum_name}」不能作为枚举名。")
+    enum_type = data_types[columns.index("Enum")]
+    id_type = data_types[columns.index(id_column)]
+    entries: list[tuple[str, int]] = []
+    seen_names: dict[str, int] = {}
+    for row_number, row in enumerate(rows, start=1):
+        variable = parse_data_value(row.get("Enum", ""), enum_type)
+        number = parse_data_value(row.get(id_column, ""), id_type)
+        if not isinstance(variable, str) or not variable.strip():
+            raise ValueError(f"第 {row_number} 行的 Enum 不能为空。")
+        variable = variable.strip()
+        if _ENUM_NAME.fullmatch(variable) is None:
+            raise ValueError(f"第 {row_number} 行的 Enum「{variable}」不是合法的变量名。")
+        if isinstance(number, bool) or not isinstance(number, int):
+            raise ValueError(f"第 {row_number} 行的 {id_column} 必须是整数。")
+        previous_row = seen_names.get(variable)
+        if previous_row is not None:
+            raise ValueError(
+                f"第 {row_number} 行与第 {previous_row} 行的 Enum「{variable}」重复。"
+            )
+        seen_names[variable] = row_number
+        entries.append((variable, number))
+    return enum_name, entries
+
+
+def export_server_enum(
+    source_name: str,
+    columns: list[str],
+    data_types: list[str],
+    rows: list[dict[str, Any]],
+) -> bytes:
+    _, entries = _enum_entries(source_name, columns, data_types, rows)
+    body = "\n".join((f"    {variable} = {number}," for variable, number in entries))
+    header = (
+        "-- author: liter_wave\n"
+        "-- Generated by: 星图 · 游戏配置导表工具\n"
+        f"-- Source TSV: {source_name}\n\n"
+    )
+    return f"{header}return {{\n{body}\n}}\n".encode("utf-8")
 
 
 def export_json_data(
@@ -156,6 +332,17 @@ def prepare_export_files(
         raise ValueError("字段、数据类型和导出端配置数量不一致。")
     if any((target not in EXPORT_TARGETS for target in targets)):
         raise ValueError("存在无效的列导出端配置。")
+    enum_columns = columns
+    enum_types = data_types
+    enum_rows = rows
+    if "Enum" in columns:
+        if not backend_directory:
+            raise ValueError("请先选择后端导出目录。")
+        kept = [index for index, column in enumerate(columns) if column != "Enum"]
+        columns = [columns[index] for index in kept]
+        data_types = [data_types[index] for index in kept]
+        targets = [targets[index] for index in kept]
+        key_columns = [key for key in key_columns or [] if key != "Enum"] or None
     backend_indexes = [
         index for index, target in enumerate(targets) if target in {"backend", "both"}
     ]
@@ -190,7 +377,9 @@ def prepare_export_files(
             )
     stem = Path(source_name).stem
     outputs: list[tuple[Path, bytes]] = []
-    if backend_indexes:
+    if backend_indexes and not _only_id_columns(
+        [columns[index] for index in backend_indexes]
+    ):
         selected_columns = [columns[index] for index in backend_indexes]
         selected_types = [data_types[index] for index in backend_indexes]
         selected_rows = [
@@ -211,7 +400,9 @@ def prepare_export_files(
             )
         )
         outputs.append((backend_path, backend_data))
-    if frontend_indexes:
+    if frontend_indexes and not _only_id_columns(
+        [columns[index] for index in frontend_indexes]
+    ):
         selected_columns = [columns[index] for index in frontend_indexes]
         selected_types = [data_types[index] for index in frontend_indexes]
         selected_rows = [
@@ -232,6 +423,16 @@ def prepare_export_files(
             )
         )
         outputs.append((frontend_path, frontend_data))
+    if "Enum" in enum_columns:
+        server_enum_path = server_enum_directory(backend_directory) / f"{stem}.lua"
+        if validate_directories:
+            server_enum_path.parent.mkdir(parents=True, exist_ok=True)
+        outputs.append(
+            (
+                server_enum_path,
+                export_server_enum(source_name, enum_columns, enum_types, enum_rows),
+            )
+        )
     if validate_directories:
         for path, _ in outputs:
             if not path.parent.is_dir():
@@ -259,7 +460,7 @@ def checked_export_directory(label: str, raw: str | None) -> str | None:
 def remove_stale_export_files(
     directory: str | None, extension: str, kept_paths: set[str]
 ) -> list[Path]:
-    if not directory or extension not in {"lua", "json"}:
+    if not directory or extension not in {"lua", "json", "ts"}:
         return []
     root = Path(directory)
     if not root.is_dir():
@@ -309,6 +510,11 @@ def write_export_files(
     )
     written_paths = []
     for path, data in outputs:
+        if path.parent.name == "enum":
+            path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and not export_content_changed(path, data):
+            written_paths.append(path)
+            continue
         path.write_bytes(data)
         written_paths.append(path)
     return written_paths

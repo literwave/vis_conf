@@ -8,8 +8,12 @@ from table_file import export_tsv, load_table
 from export_data import (
     build_export_archive,
     checked_export_directory,
+    export_content_changed,
+    server_enum_directory,
     prepare_export_files,
     remove_stale_export_files,
+    resolve_key_columns,
+    store_directory_key_rules,
     write_export_files,
 )
 
@@ -99,6 +103,9 @@ class EditorExport:
                 json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             temporary_path.replace(settings_path)
+            store_directory_key_rules(
+                self.configuration_directory, self.key_rules_by_table
+            )
         except OSError as exc:
             self.notify(f"保存导出设置失败：{exc}", error=True)
 
@@ -157,11 +164,7 @@ class EditorExport:
                         load_table(path, self.mobile_file_bytes.get(path_key))
                     )
                     saved_keys = self.key_rules_by_table.get(path.name)
-                    table_keys = (
-                        [column for column in table_columns if column in saved_keys]
-                        if saved_keys is not None
-                        else ["id"] if "id" in table_columns else []
-                    )
+                    table_keys = resolve_key_columns(table_columns, saved_keys)
                 else:
                     table_columns = state["columns"]
                     table_types = state["data_types"]
@@ -209,9 +212,13 @@ class EditorExport:
                     return
             else:
                 for path, _ in prepared_outputs:
+                    if path.parent.name == "enum":
+                        path.parent.mkdir(parents=True, exist_ok=True)
                     if not path.parent.is_dir():
                         raise ValueError(f"导出目录不存在：{path.parent}")
                 for path, data in prepared_outputs:
+                    if path.is_file() and not export_content_changed(path, data):
+                        continue
                     path.write_bytes(data)
                 if not incremental:
                     kept_outputs = {
@@ -232,6 +239,15 @@ class EditorExport:
                             kept_outputs,
                         )
                     )
+                    backend_directory = self.export_paths.get("backend")
+                    if backend_directory:
+                        removed_exports.extend(
+                            remove_stale_export_files(
+                                str(server_enum_directory(backend_directory)),
+                                "lua",
+                                kept_outputs,
+                            )
+                        )
         except (
             OSError,
             RuntimeError,
@@ -246,44 +262,87 @@ class EditorExport:
         self.refresh_configuration_files()
         self.page.update()
         label = "增量导出" if incremental else "全量导出"
+
+        def describe_output(output_path: Path) -> tuple[str, str, str]:
+            parent_name = output_path.parent.name.casefold()
+            if parent_name == "enum":
+                return "枚举", "#F4F3FF", "#5925DC"
+            backend_directory = self.export_paths.get("backend")
+            frontend_directory = self.export_paths.get("frontend")
+            try:
+                resolved = output_path.resolve()
+                if backend_directory and resolved.is_relative_to(
+                    Path(backend_directory).resolve()
+                ):
+                    return "服务端", "#EFF8FF", "#175CD3"
+                if frontend_directory and resolved.is_relative_to(
+                    Path(frontend_directory).resolve()
+                ):
+                    return "客户端", "#FFF7ED", "#C2410C"
+            except (OSError, ValueError):
+                pass
+            if parent_name in {"backend", "server"}:
+                return "服务端", "#EFF8FF", "#175CD3"
+            if parent_name in {"frontend", "client"}:
+                return "客户端", "#FFF7ED", "#C2410C"
+            return "文件", "#F2F4F7", "#344054"
+
         table_items = []
         for table_path, output_paths in table_output_paths:
-            output_description = (
-                "、".join(
-                    (
-                        (
-                            f"{output_path.parent.name}/{output_path.name}"
-                            if self.mobile_platform
-                            else str(output_path)
+            if output_paths:
+                file_rows = []
+                for output_path in output_paths:
+                    kind, background, color = describe_output(output_path)
+                    file_rows.append(
+                        ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Text(
+                                        kind,
+                                        size=10,
+                                        color=color,
+                                        weight=ft.FontWeight.W_600,
+                                        text_align=ft.TextAlign.CENTER,
+                                    ),
+                                    width=52,
+                                    bgcolor=background,
+                                    border_radius=4,
+                                    padding=ft.Padding(0, 2, 0, 2),
+                                    alignment=ft.Alignment(0, 0),
+                                ),
+                                ft.Text(
+                                    output_path.name,
+                                    size=12,
+                                    color="#344054",
+                                    tooltip=str(output_path),
+                                ),
+                            ],
+                            spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         )
-                        for output_path in output_paths
                     )
+                details = ft.Column(file_rows, spacing=4)
+            else:
+                details = ft.Text(
+                    "未生成文件",
+                    size=12,
+                    color="#98A2B3",
                 )
-                if output_paths
-                else "未生成文件（该表没有启用导出字段）"
-            )
             table_items.append(
                 ft.Container(
                     content=ft.Column(
                         [
                             ft.Text(
-                                table_path.name,
-                                size=12,
-                                color="#344054",
+                                table_path.stem,
+                                size=13,
+                                color="#101828",
                                 weight=ft.FontWeight.W_600,
                             ),
-                            ft.Text(
-                                output_description,
-                                size=10,
-                                color="#667085",
-                                max_lines=2,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                                tooltip=output_description,
-                            ),
+                            details,
                         ],
-                        spacing=3,
+                        spacing=6,
                     ),
-                    padding=ft.Padding(10, 8, 10, 8),
+                    padding=ft.Padding(12, 10, 12, 10),
                     border=ft.Border.only(bottom=ft.BorderSide(1, "#EAECF0")),
                 )
             )
@@ -309,8 +368,8 @@ class EditorExport:
                             content=ft.Column(
                                 table_items, spacing=0, scroll=ft.ScrollMode.AUTO
                             ),
-                            width=self.dialog_width(540),
-                            height=min(420, max(100, len(table_items) * 66)),
+                            width=self.dialog_width(460),
+                            height=min(460, max(140, len(table_items) * 78)),
                             border=ft.Border.all(1, "#EAECF0"),
                             border_radius=8,
                         ),

@@ -15,6 +15,7 @@ from schema import (
     SAMPLE_TARGETS,
     SAMPLE_TYPES,
 )
+from export_data import load_directory_key_rules, resolve_key_columns
 from table_file import _display_value, parse_data_value
 from editor_dialogs import EditorDialogs
 from editor_rows import EditorRows
@@ -118,10 +119,9 @@ class Workspace(
         saved_table_keys = saved_key_rules.get("item_config.tsv", [])
         if not isinstance(saved_table_keys, list):
             saved_table_keys = []
-        self.key_columns = (
-            [column for column in self.columns if column in saved_table_keys]
-            if "item_config.tsv" in saved_key_rules
-            else ["id"] if "id" in self.columns else []
+        self.key_columns = resolve_key_columns(
+            self.columns,
+            saved_table_keys if "item_config.tsv" in saved_key_rules else None,
         )
         self.current_page = 0
         self.page_size = 10
@@ -144,6 +144,9 @@ class Workspace(
             for name, keys in saved_key_rules.items()
             if isinstance(name, str) and isinstance(keys, list)
         }
+        self.key_rules_by_table.update(
+            load_directory_key_rules(self.configuration_directory)
+        )
         self.picker = ft.FilePicker()
         self.page.services.append(self.picker)
         self.configuration_directory_field = ft.TextField(

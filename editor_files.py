@@ -3,6 +3,7 @@ import copy
 import flet as ft
 import json
 import os
+from export_data import load_directory_key_rules, resolve_key_columns
 from table_file import load_table, new_configuration_table_bytes
 
 
@@ -314,11 +315,7 @@ class EditorFiles:
                     loaded_rows,
                 ) = load_table(path, self.mobile_file_bytes.get(path_key))
                 saved_keys = self.key_rules_by_table.get(path.name)
-                loaded_keys = (
-                    [column for column in loaded_columns if column in saved_keys]
-                    if saved_keys is not None
-                    else ["id"] if "id" in loaded_columns else []
-                )
+                loaded_keys = resolve_key_columns(loaded_columns, saved_keys)
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             self.notify(f"打开配置表失败：{exc}", error=True)
             return
@@ -366,11 +363,7 @@ class EditorFiles:
         self.annotations[:] = loaded_annotations
         self.rows[:] = loaded_rows
         saved_keys = self.key_rules_by_table.get(path.name)
-        self.key_columns[:] = (
-            [column for column in loaded_columns if column in saved_keys]
-            if saved_keys is not None
-            else ["id"] if "id" in loaded_columns else []
-        )
+        self.key_columns[:] = resolve_key_columns(loaded_columns, saved_keys)
         page_count = max(1, (len(self.rows) + self.page_size - 1) // self.page_size)
         if self.current_page >= page_count:
             self.current_page = page_count - 1
@@ -448,6 +441,7 @@ class EditorFiles:
         except OSError as exc:
             return f"读取配置文件目录失败：{exc}"
         self.configuration_directory = directory
+        self.key_rules_by_table.update(load_directory_key_rules(directory))
         self.configuration_directory_field.value = directory
         self.configuration_table_count.value = f"目录中有 {table_count} 张 TSV 配置表"
         self.configuration_count_metric.value = str(table_count)

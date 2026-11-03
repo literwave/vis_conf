@@ -324,7 +324,7 @@ class EditorColumns:
             return
         for row in self.rows:
             row[name] = default_value
-        if name == "id" and (not self.key_columns):
+        if name.casefold() == "id" and (not self.key_columns):
             self.key_columns.append(name)
         self.mark_active_table_modified()
         self.save_export_settings()
