@@ -9,6 +9,7 @@ from export_data import (
     build_export_archive,
     checked_export_directory,
     export_content_changed,
+    client_enum_directory,
     server_enum_directory,
     prepare_export_files,
     remove_stale_export_files,
@@ -245,6 +246,15 @@ class EditorExport:
                             remove_stale_export_files(
                                 str(server_enum_directory(backend_directory)),
                                 "lua",
+                                kept_outputs,
+                            )
+                        )
+                    frontend_directory = self.export_paths.get("frontend")
+                    if frontend_directory:
+                        removed_exports.extend(
+                            remove_stale_export_files(
+                                str(client_enum_directory(frontend_directory)),
+                                "ts",
                                 kept_outputs,
                             )
                         )

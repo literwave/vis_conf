@@ -209,7 +209,7 @@ irm 'https://cursor.com/install?win32=true' | iex
 
 导表规则默认使用 `id`（存在时）。多个 key 按列顺序嵌套，例如 `[key1][key2]`；不选择 key 时导出记录数组。Key 为空、重复或未勾选对应导出端时会报错。前后端若生成相同路径，工具会停止导出并提示冲突。
 
-字段名正好是 `Enum` 的列不写入普通 JSON / Lua。服务端另外生成 `<配置表名>Enum.lua`，放在后端目录的上一级 `enum/`。后端目录是 `server/res` 时，`RankType.tsv` 生成 `server/enum/RankTypeEnum.lua`，内容是 `变量 = Id`。客户端文件名同样加 `Enum`，例如 `client/res/RankTypeEnum.json`。没有 `Enum` 列的表仍用原表名。`Enum` 必须是合法变量名，`Id` 必须是整数，变量名不能重复。去掉 `Enum` 后，某一端如果只剩下 `Id`，这一端的配置文件不生成，枚举文件仍会生成。全量导出会删除 `enum/` 里已经没有对应配置表的 `.lua`。
+字段名正好是 `Enum` 的列不写入普通 JSON / Lua。枚举另外生成，内容都是 `变量 = Id`。后端目录是 `server/res` 时，`RankType.tsv` 生成 `server/enum/RankTypeEnum.lua`；前端目录是 `client/res` 时，对应生成 `client/enum/RankTypeEnum.ts`，形式是 `export enum RankTypeEnum { POWER = 1 }`，代码里直接写 `RankTypeEnum.POWER`。配置表本身仍用原表名，例如 `client/res/RankType.json`，里面是名称、说明等字段。`Enum` 必须是合法变量名，`Id` 必须是整数，变量名不能重复。去掉 `Enum` 后，某一端如果只剩下 `Id`，这一端的配置文件不生成，两端的枚举文件仍会生成。全量导出会删除两侧 `enum/` 里已经没有对应配置表的同格式文件。
 
 设置的目录（含 UI 配置目录）、文件格式和各表 key 规则会自动保存：
 
@@ -227,7 +227,7 @@ irm 'https://cursor.com/install?win32=true' | iex
 - JSON 导出时 Lua 表会转换为数组或对象。Lua 导出采用多行缩进格式；TSV 单元格内的 Lua 表值保持单行。
 - 字符串字段填写本地 PNG、JPG、JPEG、GIF、WEBP 或 BMP 路径时显示缩略图。相对路径以 TSV 所在目录为基准；点击缩略图可查看或编辑路径。
 - 「导出设置」里的「UI 配置目录」用来显示资源路径图标。目录例如 `D:\code\game_demo_client\assets\resources\ui`，单元格为 `ui/item_icons/speed_up` 时，显示该目录下的 `item_icons\speed_up.png`。扩展名可以省略，末尾的 `/spriteFrame` 会去掉。路径以配置目录名为前缀时会去掉这一段，其余部分在 UI 目录内查找。
-- 导出文件名使用 `<配置表名>.lua` 或 `<配置表名>.json`，前后端通过各自目录区分。带 `Enum` 列的表，客户端为 `<配置表名>Enum.json`（或 Lua），服务端枚举为上一级 `enum/<配置表名>Enum.lua`。未启用对应导出端的列不会写入该端文件。
+- 导出文件名使用 `<配置表名>.lua` 或 `<配置表名>.json`，前后端通过各自目录区分。配置表不因带 `Enum` 列而改名。客户端枚举为前端目录上一级 `enum/<配置表名>Enum.ts`，服务端枚举为后端目录上一级 `enum/<配置表名>Enum.lua`。未启用对应导出端的列不会写入该端文件。
 - Lua 文件头会标注作者 `liter_wave`、生成工具及来源 TSV 文件名。
 - 导出完成后会显示处理表数量、生成文件数量和每张表的输出路径。
 
