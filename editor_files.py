@@ -279,8 +279,17 @@ class EditorFiles:
             self.current_page = 0
         self.update_configuration_count()
         self.refresh_configuration_files()
+        if self.configuration_directory:
+            self.key_rules_by_table.update(
+                load_directory_key_rules(self.configuration_directory)
+            )
         if missing_name and tables:
             self.load_configuration_file(tables[0])
+        elif self.active_table_path is not None:
+            path_key = self.table_path_key(self.active_table_path)
+            self.table_states.pop(path_key, None)
+            self.modified_table_paths.discard(path_key)
+            self.reload_active_table()
         else:
             self.refresh_table()
         self.page.update()
@@ -331,7 +340,6 @@ class EditorFiles:
         self.active_table_path = path
         self.key_rules_by_table[self.source_name] = self.key_columns.copy()
         self.source_text.value = self.source_name
-        self.save_export_settings()
         self.refresh_configuration_files()
         self.update_row_action_buttons()
         self.refresh_table()

@@ -373,7 +373,7 @@ class EditorRows:
             for column in self.columns
         }
 
-        def update_rule(_):
+        def update_rule(_, save=True):
             previous_key_columns = self.key_columns.copy()
             self.key_columns[:] = [
                 column for column in self.columns if key_checkboxes[column].value
@@ -385,12 +385,13 @@ class EditorRows:
                 if self.key_columns
                 else "当前规则：记录数组（未按字段建立索引）"
             )
-            self.save_export_settings()
+            if save:
+                self.save_export_settings()
             self.page.update()
 
         for checkbox in key_checkboxes.values():
             checkbox.on_change = update_rule
-        update_rule(None)
+        update_rule(None, save=False)
         self.show_alert_dialog(
             ft.AlertDialog(
                 modal=True,
